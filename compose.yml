@@ -1,0 +1,21 @@
+name: afterhours_lab
+
+services:
+  afterhours-lab:
+    build: .
+    image: afterhours-lab:latest
+    env_file: .env
+    volumes:
+      - "./data:/app/data"
+    networks:
+      monitoring_net:
+        aliases: [afterhours-lab]
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    command: ["afterhours-lab-archive-earnings", "--watchlist", "/app/data/watchlist.json"]
+
+networks:
+  monitoring_net:
+    external: true
