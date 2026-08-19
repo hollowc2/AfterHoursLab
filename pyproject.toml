@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Read-only market-data lab application, gateway-only (no Schwab credentials of its own)"
 requires-python = ">=3.12"
 dependencies = [
+    "asyncpg>=0.30.0",
     "httpx>=0.27.0",
     "pydantic>=2.9.0",
     "pydantic-settings>=2.6.0",
@@ -19,6 +20,7 @@ schwab-gateway-sdk = { git = "https://github.com/hollowc2/SchwabGateway.git", ta
 afterhours-lab-smoke = "afterhours_lab.main:main"
 afterhours-lab-watch = "afterhours_lab.watch:main"
 afterhours-lab-archive-earnings = "afterhours_lab.archive_earnings:main"
+afterhours-lab-migrate = "afterhours_lab.db.migrate:main"
 
 [build-system]
 requires = ["hatchling"]

@@ -92,6 +92,30 @@ uv run afterhours-lab-archive-earnings --from 2026-08-19 --to 2026-08-21 --dry-r
 This is the base data source for the lab; other earnings-driven studies can build on
 top of it later.
 
+## Database
+
+AfterHoursLab records 1-minute candles for flagged earnings symbols in its own
+isolated database on the shared TimescaleDB instance (same per-app-database convention
+Butterflyguy uses — never shares credentials or a database with another app). Schema is
+raw SQL migrations under `src/afterhours_lab/db/migrations/`, tracked in a
+`schema_migrations` ledger with a Postgres advisory lock guarding concurrent runs.
+
+Two tables: `earnings_events` (one row per flagged symbol/date, with a captured flag
+per window) and `candles` (a TimescaleDB hypertable of 1m OHLCV bars, tagged with which
+capture window — `day_before` / `after_hours` / `day_after` — and which earnings event
+they belong to).
+
+Set `DATABASE__HOST`/`PORT`/`NAME`/`USER`/`PASSWORD` in `.env`, then:
+
+```bash
+uv run afterhours-lab-migrate
+```
+
+The actual recording pipeline (pulling 1m candles into these tables) depends on a
+gateway-side historical-candles endpoint that doesn't exist yet — see the open design
+question in SchwabGateway about a point-in-time date+session history contract vs. its
+existing trailing-window `/v1/history`. This schema is ready ahead of that.
+
 ## Deploying on helios
 
 AfterHoursLab runs as its own container on `monitoring_net`, next to `schwab-gateway`
@@ -108,8 +132,14 @@ cat > .env <<'EOF'
 SCHWAB_GATEWAY_URL=http://schwab-gateway:8011
 SCHWAB_GATEWAY_API_KEY=<the afterhours-lab gateway key>
 FINNHUB_API_KEY=<finnhub key>
+DATABASE__HOST=timescaledb
+DATABASE__PORT=5432
+DATABASE__NAME=afterhours_lab
+DATABASE__USER=afterhours_lab
+DATABASE__PASSWORD=<the afterhours_lab db password>
 EOF
 docker compose build
+docker compose run --rm afterhours-lab afterhours-lab-migrate
 
 # cron (crontab -e), pre-market weekdays — single UTC slot, drifts an hour across DST
 30 12 * * 1-5 cd /opt/afterhours-lab && docker compose run --rm afterhours-lab >> /opt/afterhours-lab/archive_earnings.log 2>&1
