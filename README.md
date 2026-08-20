@@ -237,3 +237,27 @@ quick check of the last cron outcome, without opening the log:
 ```bash
 cat /opt/afterhours-lab/data/last_run_status.json
 ```
+
+### Capture cron (day_before / after_hours / day_after)
+
+`afterhours-lab-capture` needs one cron fire per capture window, each timed to a
+specific point in the trading day (see `tools/run_capture_*_cron.sh` for why each
+timing was chosen). Unlike `archive-earnings`, these are timing-sensitive enough that
+a plain single-UTC-slot cron line isn't good enough across a DST transition — each one
+follows Butterflyguy's UTC-dual-slot-plus-wrapper pattern (`tools/run_morning_scan_cron.sh`):
+the crontab fires at two UTC hour candidates and the wrapper script no-ops unless it's
+actually the target `America/New_York` clock time.
+
+Install each with the same idempotent, additive pattern Butterflyguy's own cron
+snippets use — this only ever touches the line matching its own wrapper script name,
+so it's safe to run alongside Butterflyguy's or any other app's crontab entries on the
+same host:
+
+```bash
+crontab -l 2>/dev/null | grep -v run_capture_day_before_cron.sh | cat - infra/cron/capture_day_before.cron | crontab -
+crontab -l 2>/dev/null | grep -v run_capture_after_hours_cron.sh | cat - infra/cron/capture_after_hours.cron | crontab -
+crontab -l 2>/dev/null | grep -v run_capture_day_after_cron.sh | cat - infra/cron/capture_day_after.cron | crontab -
+```
+
+`capture_status.json` next to `watchlist.json` in `./data` tracks the outcome of the
+most recent capture run, same idea as `last_run_status.json` for archive-earnings.
