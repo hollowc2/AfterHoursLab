@@ -139,6 +139,9 @@ no host-port tunnel is needed from inside the network). There's no persistent pr
 mkdir -p /opt/afterhours-lab && cd /opt/afterhours-lab
 git clone <this repo> .
 mkdir -p data
+# the container runs as uid 1001 (afterhours); the bind-mounted dir must be
+# writable by that uid or archive-earnings will crash on the watchlist write
+sudo chown 1001:1001 data
 cat > .env <<'EOF'
 SCHWAB_GATEWAY_URL=http://schwab-gateway:8011
 SCHWAB_GATEWAY_API_KEY=<the afterhours-lab gateway key>
