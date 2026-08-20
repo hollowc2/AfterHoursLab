@@ -22,6 +22,7 @@ afterhours-lab-watch = "afterhours_lab.watch:main"
 afterhours-lab-archive-earnings = "afterhours_lab.archive_earnings:main"
 afterhours-lab-migrate = "afterhours_lab.db.migrate:main"
 afterhours-lab-capture = "afterhours_lab.capture:main"
+afterhours-lab-moves = "afterhours_lab.moves:main"
 
 [build-system]
 requires = ["hatchling"]

@@ -161,6 +161,34 @@ so it isn't re-litigated later — if a future migration turns out to need a rea
 rollback path (e.g. before a risky schema change), that's a new decision to make
 explicitly, not a gap to assume away.
 
+## Realized earnings moves
+
+```bash
+uv run afterhours-lab-moves
+uv run afterhours-lab-moves --from 2026-08-01 --to 2026-08-31
+```
+
+Reports the realized price move for every earnings event that has both its
+`day_before` and `day_after` capture windows recorded (`earnings_events.day_before_captured`
+and `.day_after_captured`), using only candles already persisted by
+`afterhours-lab-capture` — no options/gateway chain data involved. For each event:
+
+- **Reaction (AH)** — `day_before` close to `after_hours` close: the immediate
+  reaction to the print, if that window was captured
+- **Gap (Open)** — `day_before` close to `day_after` open: the overnight gap into
+  the next session
+- **Total Move** — `day_before` close to `day_after` close: the full round-trip
+  move
+- **EPS Surprise** — `eps_actual` vs `eps_estimate`, for context alongside the move
+
+A field is left blank rather than guessed at whenever its underlying candle is
+missing (e.g. the `after_hours` window wasn't captured for that event, or a window's
+`*_captured` flag is set but a zero-quote poll left no candle rows).
+
+This is the "actual" half of an eventual expected-vs-actual move comparison once
+implied-vol/expected-move data exists (see the open gateway punch list); until then
+it stands alone as a report on what earnings prints actually did to the stock.
+
 ## Deploying on helios
 
 AfterHoursLab runs as its own container on `monitoring_net`, next to `schwab-gateway`
