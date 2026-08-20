@@ -78,16 +78,25 @@ uses [Finnhub](https://finnhub.io)'s free `/calendar/earnings` endpoint instead 
 independent source with its own API key, unrelated to the SchwabGateway connection.
 Set `FINNHUB_API_KEY` in `.env`.
 
-Base behavior: find symbols reporting earnings **after market close** and archive
-them into the persisted watchlist, so the watch viewer picks them up.
+Base behavior: find symbols reporting earnings **after market close**, record each as
+a row in `earnings_events` (idempotent — a symbol/date already on file is left alone),
+then rewrite the persisted watchlist to exactly the symbols currently within their
+capture window (the trading day before their earnings date, through the trading day
+after), so the watch viewer only ever shows what's actually still relevant. The
+watchlist file is a materialized view of `earnings_events`, not an accumulating log —
+each run replaces its contents rather than merging into them, and a symbol drops out
+on its own once its window passes, even on a run that finds no new earnings.
 
 ```bash
-# today's after-close earnings, archived into ./watchlist.json
+# today's after-close earnings: recorded to earnings_events, watchlist.json refreshed
 uv run afterhours-lab-archive-earnings
 
-# a date range, without touching the watchlist
+# a date range, without writing to earnings_events or the watchlist
 uv run afterhours-lab-archive-earnings --from 2026-08-19 --to 2026-08-21 --dry-run
 ```
+
+Requires both `FINNHUB_API_KEY` and the `DATABASE__*` settings below — `--dry-run` is
+the only mode that doesn't touch either the database or the watchlist file.
 
 This is the base data source for the lab; other earnings-driven studies can build on
 top of it later.
@@ -100,10 +109,12 @@ Butterflyguy uses — never shares credentials or a database with another app). 
 raw SQL migrations under `src/afterhours_lab/db/migrations/`, tracked in a
 `schema_migrations` ledger with a Postgres advisory lock guarding concurrent runs.
 
-Two tables: `earnings_events` (one row per flagged symbol/date, with a captured flag
-per window) and `candles` (a TimescaleDB hypertable of 1m OHLCV bars, tagged with which
-capture window — `day_before` / `after_hours` / `day_after` — and which earnings event
-they belong to).
+Two tables: `earnings_events` (one row per flagged symbol/date — populated by
+`afterhours-lab-archive-earnings`, and the source of truth for what's in the watchlist)
+and `candles` (a TimescaleDB hypertable of 1m OHLCV bars, tagged with which capture
+window — `day_before` / `after_hours` / `day_after` — and which earnings event they
+belong to). The `*_captured` flags on `earnings_events` stay `FALSE` until a candles
+recording pipeline exists to set them — see below.
 
 Set `DATABASE__HOST`/`PORT`/`NAME`/`USER`/`PASSWORD` in `.env`, then:
 

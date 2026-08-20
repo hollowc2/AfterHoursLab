@@ -100,3 +100,12 @@ def after_close_symbols(entries: list[EarningsEntry]) -> list[str]:
         if entry.is_after_close:
             seen.setdefault(entry.symbol, None)
     return list(seen)
+
+
+def after_close_entries(entries: list[EarningsEntry]) -> list[EarningsEntry]:
+    """Distinct (symbol, date) after-close entries, in first-seen order."""
+    seen: dict[tuple[str, dt.date], EarningsEntry] = {}
+    for entry in entries:
+        if entry.is_after_close:
+            seen.setdefault((entry.symbol, entry.date), entry)
+    return list(seen.values())

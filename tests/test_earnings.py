@@ -6,7 +6,9 @@ import pytest
 from afterhours_lab.earnings import (
     EarningsCalendarClient,
     EarningsCalendarError,
+    EarningsEntry,
     EarningsSettings,
+    after_close_entries,
     after_close_symbols,
 )
 
@@ -81,7 +83,22 @@ async def test_get_earnings_calendar_raises_on_malformed_payload() -> None:
 
 def test_after_close_symbols_filters_and_dedupes() -> None:
     entries_payload = CALENDAR_PAYLOAD["earningsCalendar"]
-    from afterhours_lab.earnings import EarningsEntry
 
     entries = [EarningsEntry.model_validate(row) for row in entries_payload]
     assert after_close_symbols(entries) == ["AAA"]
+
+
+def test_after_close_entries_filters_and_dedupes_by_symbol_and_date() -> None:
+    entries = [
+        EarningsEntry(symbol="AAA", date=dt.date(2026, 8, 19), hour="amc"),
+        EarningsEntry(symbol="BBB", date=dt.date(2026, 8, 19), hour="bmo"),
+        EarningsEntry(symbol="AAA", date=dt.date(2026, 8, 19), hour="amc"),
+        EarningsEntry(symbol="AAA", date=dt.date(2026, 8, 20), hour="amc"),
+    ]
+
+    matched = after_close_entries(entries)
+
+    assert [(e.symbol, e.date) for e in matched] == [
+        ("AAA", dt.date(2026, 8, 19)),
+        ("AAA", dt.date(2026, 8, 20)),
+    ]
