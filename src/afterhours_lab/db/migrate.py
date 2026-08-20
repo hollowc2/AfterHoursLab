@@ -15,6 +15,7 @@ from pathlib import Path
 import asyncpg
 import structlog
 
+from afterhours_lab.db.advisory_lock import advisory_lock
 from afterhours_lab.db.config import DatabaseSettings
 
 log = structlog.get_logger()
@@ -55,8 +56,7 @@ async def apply_migrations(
     applied: list[str] = []
 
     async with pool.acquire() as conn:
-        await conn.execute("SELECT pg_advisory_lock($1)", ADVISORY_LOCK_KEY)
-        try:
+        async with advisory_lock(conn, ADVISORY_LOCK_KEY):
             await conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -86,8 +86,6 @@ async def apply_migrations(
                     )
                 log.info("migration_applied", version=migration.version)
                 applied.append(migration.version)
-        finally:
-            await conn.execute("SELECT pg_advisory_unlock($1)", ADVISORY_LOCK_KEY)
 
     return applied
 

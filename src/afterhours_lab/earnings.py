@@ -25,13 +25,24 @@ class EarningsSettings(BaseSettings):
 
 class EarningsEntry(BaseModel):
     """One earnings-calendar row. Extra fields from the upstream API are ignored;
-    this source isn't a versioned contract like the gateway's."""
+    this source isn't a versioned contract like the gateway's.
 
-    model_config = ConfigDict(extra="ignore")
+    EPS/revenue estimate-vs-actual is the biggest explanatory variable for a
+    post-earnings price reaction, so those fields (plus quarter/year, needed to
+    disambiguate which print a surprise belongs to) are captured alongside the
+    date/hour used for scheduling capture windows."""
+
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
     symbol: str
     date: dt.date
     hour: str | None = None
+    eps_estimate: float | None = Field(default=None, alias="epsEstimate")
+    eps_actual: float | None = Field(default=None, alias="epsActual")
+    revenue_estimate: float | None = Field(default=None, alias="revenueEstimate")
+    revenue_actual: float | None = Field(default=None, alias="revenueActual")
+    quarter: int | None = None
+    year: int | None = None
 
     @property
     def is_after_close(self) -> bool:

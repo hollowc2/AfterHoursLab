@@ -101,6 +101,29 @@ the only mode that doesn't touch either the database or the watchlist file.
 This is the base data source for the lab; other earnings-driven studies can build on
 top of it later.
 
+**Re-entrancy guard.** If a run is still in progress when the next cron fire starts
+(e.g. stuck in gateway backoff, since this app is `priority: background`), a second
+process racing the first on `_upsert_earnings_events` / `save_watchlist` could corrupt
+either. Every non-dry-run invocation takes a non-blocking Postgres advisory lock
+(`ARCHIVE_LOCK_KEY` in `archive_earnings.py`, a fixed key distinct from
+`db/migrate.py`'s `ADVISORY_LOCK_KEY`) before touching `earnings_events` or the
+watchlist file. If another run already holds it, this run logs, records a (non-failure)
+skip in `last_run_status.json`, and exits `0` rather than blocking — a wedged process
+shouldn't cause its replacements to queue up behind it too.
+
+**Observability.** A run's outcome is recorded in `last_run_status.json`, written next
+to the watchlist file (`ok`/`detail`/`at`), so success or failure is visible without
+grepping `archive_earnings.log`. Any failure — the earnings-calendar fetch, the DB
+write, or the watchlist write (the exact failure mode from the 2026-08-20 incident,
+where a `PermissionError` on the watchlist write crashed silently with only the cron
+log to show for it) — also fires an optional Telegram alert via `notify.send()`, the
+same lightweight pattern Butterflyguy's `schwab_token_keepalive.py` cron job uses (see
+`TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` in `.env.example`). Both env vars are
+optional: unset, `notify.send()` silently no-ops and `last_run_status.json` is the only
+signal, which is why it's written unconditionally rather than being an add-on to the
+Telegram path. This deliberately skips a healthchecks.io/cronitor-style external ping —
+no new external service, reuses infra the operator already runs for Butterflyguy.
+
 ## Database
 
 AfterHoursLab records 1-minute candles for flagged earnings symbols in its own
@@ -127,6 +150,17 @@ gateway-side historical-candles endpoint that doesn't exist yet — see the open
 question in SchwabGateway about a point-in-time date+session history contract vs. its
 existing trailing-window `/v1/history`. This schema is ready ahead of that.
 
+**Migrations are forward-only, by decision, not by omission.** `apply_migrations` in
+`db/migrate.py` has no down-migration tooling, and none is planned — this matches
+Butterflyguy's own migration runner (`db/migrations/run_migrations.py`), which is also
+forward-only with the same checksum-guard-plus-advisory-lock shape. A migration that
+needs undoing gets fixed by writing a new forward migration that corrects it, not by
+rolling back; the checksum guard means an already-applied file can't be edited in place
+to "become" that fix. This was a deliberate call ahead of a second migration landing,
+so it isn't re-litigated later — if a future migration turns out to need a real
+rollback path (e.g. before a risky schema change), that's a new decision to make
+explicitly, not a gap to assume away.
+
 ## Deploying on helios
 
 AfterHoursLab runs as its own container on `monitoring_net`, next to `schwab-gateway`
@@ -151,6 +185,9 @@ DATABASE__PORT=5432
 DATABASE__NAME=afterhours_lab
 DATABASE__USER=afterhours_lab
 DATABASE__PASSWORD=<the afterhours_lab db password>
+# optional: Telegram alert on archive-earnings failure — see .env.example
+TELEGRAM_BOT_TOKEN=<optional>
+TELEGRAM_CHAT_ID=<optional>
 EOF
 docker compose build
 docker compose run --rm afterhours-lab afterhours-lab-migrate
@@ -165,5 +202,10 @@ docker compose run --rm afterhours-lab afterhours-lab-watch --watchlist /app/dat
 docker compose run --rm afterhours-lab afterhours-lab-smoke
 ```
 
-`./data` on the host persists `watchlist.json` across container runs (the image itself
-is stateless and rebuilt from source each deploy).
+`./data` on the host persists `watchlist.json` and `last_run_status.json` across
+container runs (the image itself is stateless and rebuilt from source each deploy). A
+quick check of the last cron outcome, without opening the log:
+
+```bash
+cat /opt/afterhours-lab/data/last_run_status.json
+```

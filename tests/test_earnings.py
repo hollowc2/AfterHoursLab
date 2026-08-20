@@ -88,6 +88,29 @@ def test_after_close_symbols_filters_and_dedupes() -> None:
     assert after_close_symbols(entries) == ["AAA"]
 
 
+def test_earnings_entry_parses_eps_and_revenue_surprise_fields() -> None:
+    row = {
+        "symbol": "AAA",
+        "date": "2026-08-19",
+        "hour": "amc",
+        "epsEstimate": 1.23,
+        "epsActual": 1.45,
+        "revenueEstimate": 1_000_000.0,
+        "revenueActual": 1_050_000.0,
+        "quarter": 3,
+        "year": 2026,
+    }
+
+    entry = EarningsEntry.model_validate(row)
+
+    assert entry.eps_estimate == 1.23
+    assert entry.eps_actual == 1.45
+    assert entry.revenue_estimate == 1_000_000.0
+    assert entry.revenue_actual == 1_050_000.0
+    assert entry.quarter == 3
+    assert entry.year == 2026
+
+
 def test_after_close_entries_filters_and_dedupes_by_symbol_and_date() -> None:
     entries = [
         EarningsEntry(symbol="AAA", date=dt.date(2026, 8, 19), hour="amc"),
