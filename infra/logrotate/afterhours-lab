@@ -1,0 +1,18 @@
+# AfterHoursLab cron logs. Install as /etc/logrotate.d/afterhours-lab (root-owned,
+# mode 0644) — logrotate silently skips config files that are group- or
+# world-writable.
+#
+# copytruncate, not create: the day_after capture holds its stdout redirect open for
+# a 395-minute run, so a rotation that renames the file out from under it would leave
+# the container writing to an unlinked inode for the rest of the session — the log
+# would look truncated and the rest of the run would vanish. copytruncate copies then
+# truncates in place, so the open fd keeps working.
+/opt/afterhours-lab/*.log {
+    weekly
+    rotate 8
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+}

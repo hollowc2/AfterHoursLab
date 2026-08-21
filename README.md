@@ -303,6 +303,21 @@ crontab -l 2>/dev/null | grep -v run_capture_day_after_cron.sh | cat - infra/cro
 `capture_status.json` next to `watchlist.json` in `./data` tracks the outcome of the
 most recent capture run, same idea as `last_run_status.json` for archive-earnings.
 
+### Log rotation
+
+The four cron entries append to `/opt/afterhours-lab/*.log` forever. `infra/logrotate/
+afterhours-lab` rotates them weekly, keeping 8 compressed generations:
+
+```bash
+sudo install -m 0644 -o root -g root infra/logrotate/afterhours-lab /etc/logrotate.d/afterhours-lab
+sudo logrotate --debug /etc/logrotate.d/afterhours-lab   # dry run, prints what it would do
+```
+
+It uses `copytruncate` rather than `create` on purpose: the `day_after` capture holds
+its stdout redirect open for a 395-minute run, so a rotation that renamed the file out
+from under it would leave the container writing to an unlinked inode for the rest of
+the session.
+
 **Per-window re-entrancy guard.** `capture.py` holds a non-blocking advisory lock for
 its entire poll — minutes to hours — so the key has to be per-window
 (`capture_lock_key(window)` = `CAPTURE_LOCK_KEY` + a pinned per-window offset), not one
