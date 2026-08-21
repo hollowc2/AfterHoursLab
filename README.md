@@ -88,7 +88,8 @@ each run replaces its contents rather than merging into them, and a symbol drops
 on its own once its window passes, even on a run that finds no new earnings.
 
 ```bash
-# today's after-close earnings: recorded to earnings_events, watchlist.json refreshed
+# the active window's after-close earnings: recorded to earnings_events,
+# watchlist.json refreshed. Defaults to previous..next trading day (see below).
 uv run afterhours-lab-archive-earnings
 
 # a date range, without writing to earnings_events or the watchlist
@@ -97,6 +98,31 @@ uv run afterhours-lab-archive-earnings --from 2026-08-19 --to 2026-08-21 --dry-r
 
 Requires both `FINNHUB_API_KEY` and the `DATABASE__*` settings below — `--dry-run` is
 the only mode that doesn't touch either the database or the watchlist file.
+
+**Default date range.** With no `--from`/`--to`, a run covers the previous through the
+next trading day, matching the capture window itself. Both ends are load-bearing: the
+3:55 PM `day_before` capture works on symbols whose earnings date is *tomorrow*, so
+tomorrow's after-close names have to be in `earnings_events` by the morning run; and
+refetching yesterday backfills `eps_actual`/`revenue_actual` for prints that hadn't
+reported yet when they were first recorded.
+
+**Watchlist file format.** `watchlist.json` carries the date it was written for:
+
+```json
+{ "as_of": "2026-08-21", "symbols": ["AAA", "BBB"] }
+```
+
+Without `as_of` a stale watchlist is indistinguishable from a current one — which is
+how a list of symbols from two days earlier ends up on screen looking authoritative.
+`afterhours-lab-watch` checks it and prints a warning (it still runs; it's an
+interactive viewer) when the file predates the most recent trading day. A Friday file
+read over the weekend is correctly treated as current, since no run is scheduled in
+between. A bare JSON array is still accepted on read — the pre-`as_of` format, and a
+convenient thing to hand-write — and always counts as stale.
+
+A quiet day with no after-close names writes an *empty* watchlist stamped with today's
+date, rather than keeping the previous day's symbols. That's a real answer, not a
+failure: nothing is in the capture window.
 
 This is the base data source for the lab; other earnings-driven studies can build on
 top of it later.
@@ -220,8 +246,8 @@ EOF
 docker compose build
 docker compose run --rm afterhours-lab afterhours-lab-migrate
 
-# cron (crontab -e), pre-market weekdays — single UTC slot, drifts an hour across DST
-30 12 * * 1-5 cd /opt/afterhours-lab && docker compose run --rm afterhours-lab >> /opt/afterhours-lab/archive_earnings.log 2>&1
+# cron: see "Cron install" below — archive-earnings and all three capture windows
+# are installed the same way, from infra/cron/
 
 # on-demand: watch the archived list live
 docker compose run --rm afterhours-lab afterhours-lab-watch --watchlist /app/data/watchlist.json
@@ -238,15 +264,29 @@ quick check of the last cron outcome, without opening the log:
 cat /opt/afterhours-lab/data/last_run_status.json
 ```
 
-### Capture cron (day_before / after_hours / day_after)
+### Cron install (archive-earnings + the three capture windows)
 
-`afterhours-lab-capture` needs one cron fire per capture window, each timed to a
-specific point in the trading day (see `tools/run_capture_*_cron.sh` for why each
-timing was chosen). Unlike `archive-earnings`, these are timing-sensitive enough that
-a plain single-UTC-slot cron line isn't good enough across a DST transition — each one
-follows Butterflyguy's UTC-dual-slot-plus-wrapper pattern (`tools/run_morning_scan_cron.sh`):
-the crontab fires at two UTC hour candidates and the wrapper script no-ops unless it's
-actually the target `America/New_York` clock time.
+Four cron entries, each timed to a specific point in the trading day (see the matching
+`tools/run_*_cron.sh` for why each timing was chosen):
+
+| Entry | ET time | What it does |
+| --- | --- | --- |
+| `archive_earnings` | 8:30 AM | Refreshes `earnings_events` and `watchlist.json` |
+| `capture_day_before` | 3:55 PM | Pre-earnings closing candles |
+| `capture_after_hours` | 4:00 PM | The earnings-reaction window |
+| `capture_day_after` | 9:28 AM | Next session, open through close |
+
+**`archive_earnings` is the producer the other three read** — `capture.py` picks its
+symbols out of `earnings_events`, so a day this doesn't run is a day nothing gets
+captured. It goes at 8:30 AM ET to sit between the two things it serves: late enough
+that the previous evening's after-close prints have published actuals, and well ahead
+of the 3:55 PM `day_before` capture, which needs tomorrow's names already in the table.
+
+All four are timing-sensitive enough that a plain single-UTC-slot cron line isn't good
+enough across a DST transition — each one follows Butterflyguy's
+UTC-dual-slot-plus-wrapper pattern (`tools/run_morning_scan_cron.sh`): the crontab
+fires at two UTC hour candidates and the wrapper script no-ops unless it's actually the
+target `America/New_York` clock time.
 
 Install each with the same idempotent, additive pattern Butterflyguy's own cron
 snippets use — this only ever touches the line matching its own wrapper script name,
@@ -254,6 +294,7 @@ so it's safe to run alongside Butterflyguy's or any other app's crontab entries 
 same host:
 
 ```bash
+crontab -l 2>/dev/null | grep -v run_archive_earnings_cron.sh | cat - infra/cron/archive_earnings.cron | crontab -
 crontab -l 2>/dev/null | grep -v run_capture_day_before_cron.sh | cat - infra/cron/capture_day_before.cron | crontab -
 crontab -l 2>/dev/null | grep -v run_capture_after_hours_cron.sh | cat - infra/cron/capture_after_hours.cron | crontab -
 crontab -l 2>/dev/null | grep -v run_capture_day_after_cron.sh | cat - infra/cron/capture_day_after.cron | crontab -

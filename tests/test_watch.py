@@ -1,3 +1,4 @@
+import contextlib
 import datetime as dt
 
 import pytest
@@ -5,6 +6,7 @@ from schwab_gateway_sdk.client import GatewayUnavailableError
 from schwab_gateway_sdk.models import QuoteResponseV1, QuoteV1
 
 from afterhours_lab import watch
+from afterhours_lab.watchlist import save_watchlist
 
 NOW = dt.datetime.now(dt.timezone.utc)
 
@@ -85,3 +87,46 @@ async def test_run_watch_backs_off_on_gateway_error(monkeypatch: pytest.MonkeyPa
         await watch.run_watch(gateway, ["SPY"], interval_seconds=1)
 
     assert sleep_delays[0] == watch.BACKOFF_SECONDS
+
+
+async def test_main_warns_when_the_persisted_watchlist_is_stale(
+    tmp_path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A stale list on screen looking authoritative is the failure this guards: the
+    operator has to be told the archive run hasn't refreshed it."""
+    path = tmp_path / "watchlist.json"
+    save_watchlist([], path, as_of=dt.date(2020, 1, 2))
+
+    exit_code = await watch._main(["--watchlist", str(path)])
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    assert "stale" in captured.err
+    assert "2020-01-02" in captured.err
+    assert "afterhours-lab-archive-earnings" in captured.err
+
+
+async def test_main_does_not_warn_for_symbols_given_on_the_command_line(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Explicit symbols are the operator's own choice; only the persisted file can be
+    out of date, so the stale check must not fire for them."""
+    path = tmp_path / "watchlist.json"
+    save_watchlist([], path, as_of=dt.date(2020, 1, 2))
+
+    monkeypatch.setattr(watch, "AppSettings", lambda: object())
+
+    @contextlib.asynccontextmanager
+    async def fake_client(_settings):
+        yield object()
+
+    async def fake_run_watch(_gateway, symbols, *, interval_seconds):
+        assert symbols == ["SPY"]
+
+    monkeypatch.setattr(watch, "build_gateway_client", fake_client)
+    monkeypatch.setattr(watch, "run_watch", fake_run_watch)
+
+    exit_code = await watch._main(["SPY", "--watchlist", str(path)])
+
+    assert exit_code == 0
+    assert "stale" not in capsys.readouterr().err

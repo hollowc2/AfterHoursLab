@@ -6,7 +6,7 @@ import pytest
 from afterhours_lab import archive_earnings
 from afterhours_lab.earnings import EarningsCalendarError, EarningsEntry
 from afterhours_lab.status import status_path_for
-from afterhours_lab.watchlist import load_watchlist
+from afterhours_lab.watchlist import load_watchlist, read_watchlist
 
 TODAY = dt.date(2026, 8, 19)  # Wednesday
 
@@ -454,7 +454,7 @@ async def test_main_records_failure_and_notifies_on_unexpected_exception(
     notified = []
     monkeypatch.setattr(archive_earnings.notify, "send", lambda message: notified.append(message))
 
-    def boom(_symbols, _path):
+    def boom(_symbols, _path, *, as_of=None):
         raise PermissionError("boom")
 
     monkeypatch.setattr(archive_earnings, "save_watchlist", boom)
@@ -476,3 +476,59 @@ def test_previous_and_next_trading_day_skip_weekends() -> None:
 
     assert archive_earnings._next_trading_day(friday) == monday
     assert archive_earnings._previous_trading_day(monday) == friday
+
+
+def test_default_date_range_spans_the_active_window() -> None:
+    """The default fetch has to reach the *next* trading day, or the 3:55 PM
+    day_before capture would never find tomorrow's after-close names in
+    earnings_events; and back to the previous one, so yesterday's actuals get
+    backfilled once they publish."""
+    args = archive_earnings.parse_args([], TODAY)
+    assert args.from_date == dt.date(2026, 8, 18)  # Tuesday
+    assert args.to_date == dt.date(2026, 8, 20)  # Thursday
+
+
+def test_default_date_range_skips_the_weekend() -> None:
+    friday = dt.date(2026, 8, 21)
+    args = archive_earnings.parse_args([], friday)
+    assert args.from_date == dt.date(2026, 8, 20)  # Thursday
+    assert args.to_date == dt.date(2026, 8, 24)  # Monday, not Saturday
+
+
+def test_explicit_dates_still_override_the_defaults() -> None:
+    args = archive_earnings.parse_args(["--from", "2026-01-05", "--to", "2026-01-09"], TODAY)
+    assert args.from_date == dt.date(2026, 1, 5)
+    assert args.to_date == dt.date(2026, 1, 9)
+
+
+async def test_written_watchlist_is_stamped_with_the_runs_today(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """as_of comes from the run's own `today`, which is what lets a later reader tell
+    a current watchlist from one left behind by a run that stopped happening."""
+    watchlist_path = tmp_path / "watchlist.json"
+    patch_common(monkeypatch, entries_result=entries(("AAA", "amc")))
+
+    exit_code = await archive_earnings._main(["--watchlist", str(watchlist_path)], today=TODAY)
+
+    assert exit_code == 0
+    result = read_watchlist(watchlist_path)
+    assert result.as_of == TODAY
+    assert not result.is_stale(TODAY)
+
+
+async def test_quiet_day_writes_an_empty_but_current_watchlist(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A day with no after-close names is a real answer, not a failure: the watchlist
+    goes empty rather than keeping yesterday's symbols, and is still stamped current
+    so nothing reports it as stale."""
+    watchlist_path = tmp_path / "watchlist.json"
+    patch_common(monkeypatch, entries_result=entries(("AAA", "bmo")))
+
+    exit_code = await archive_earnings._main(["--watchlist", str(watchlist_path)], today=TODAY)
+
+    assert exit_code == 0
+    result = read_watchlist(watchlist_path)
+    assert result.symbols == []
+    assert result.as_of == TODAY

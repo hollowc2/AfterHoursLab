@@ -52,8 +52,24 @@ def parse_args(argv: list[str], today: dt.date) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Archive after-close earnings into earnings_events and refresh the watchlist"
     )
-    parser.add_argument("--from", dest="from_date", type=dt.date.fromisoformat, default=today)
-    parser.add_argument("--to", dest="to_date", type=dt.date.fromisoformat, default=today)
+    # Default to the same window `_active_symbols` selects on — previous through next
+    # trading day — not just `today`. Two reasons, both load-bearing:
+    #   * The day_before capture fires at 3:55 PM for symbols whose earnings_date is
+    #     the *next* trading day, so tomorrow's after-close names have to already be
+    #     in earnings_events by this morning's run. Fetching only `today` would mean
+    #     they never land in time and every day_before window came up empty.
+    #   * Refetching the previous day backfills eps_actual/revenue_actual for prints
+    #     that hadn't reported yet when they were first recorded (see the COALESCE
+    #     directions in _upsert_earnings_events).
+    parser.add_argument(
+        "--from",
+        dest="from_date",
+        type=dt.date.fromisoformat,
+        default=_previous_trading_day(today),
+    )
+    parser.add_argument(
+        "--to", dest="to_date", type=dt.date.fromisoformat, default=_next_trading_day(today)
+    )
     parser.add_argument(
         "--watchlist",
         type=Path,
@@ -224,7 +240,10 @@ async def _main(argv: list[str], *, today: dt.date | None = None) -> int:
             return 0
 
         active, inserted_count = result
-        save_watchlist(active, args.watchlist)
+        # Stamped with the run's own `today`, not the file's mtime: that's what makes
+        # a later reader able to tell a current watchlist from one left behind by a
+        # run that stopped happening days ago.
+        save_watchlist(active, args.watchlist, as_of=today)
         print(f"watchlist ({args.watchlist}): {active}")
         _record_success(
             status_path,

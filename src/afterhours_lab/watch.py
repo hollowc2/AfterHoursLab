@@ -18,7 +18,7 @@ from afterhours_lab.gateway import build_gateway_client
 from afterhours_lab.watchlist import (
     DEFAULT_WATCHLIST_PATH,
     add_symbol,
-    load_watchlist,
+    read_watchlist,
     remove_symbol,
 )
 
@@ -106,10 +106,25 @@ async def _main(argv: list[str]) -> int:
         print(f"watchlist ({args.watchlist}): {symbols}")
         return 0
 
-    symbols = args.symbols or load_watchlist(args.watchlist)
-    if not symbols:
-        print(f"no symbols given and {args.watchlist} is empty; pass symbols or use --add")
-        return 1
+    # Symbols given on the command line are the operator's own choice and carry no
+    # freshness question; only the persisted file can be out of date.
+    if args.symbols:
+        symbols = args.symbols
+    else:
+        watchlist = read_watchlist(args.watchlist)
+        symbols = watchlist.symbols
+        # Warn rather than refuse: this is an interactive viewer, and a stale list is
+        # still worth looking at as long as the operator knows it's stale.
+        staleness = watchlist.staleness_message()
+        if staleness:
+            log.warning("watchlist_stale", detail=staleness)
+            print(f"warning: {staleness}", file=sys.stderr)
+        if not symbols:
+            as_of = f" (as of {watchlist.as_of.isoformat()})" if watchlist.as_of else ""
+            print(
+                f"no symbols given and {args.watchlist} is empty{as_of}; pass symbols or use --add"
+            )
+            return 1
 
     settings = AppSettings()
     async with build_gateway_client(settings) as gateway:

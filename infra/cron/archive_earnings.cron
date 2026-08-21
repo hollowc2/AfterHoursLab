@@ -1,0 +1,6 @@
+# AfterHoursLab: refresh earnings_events + watchlist.json — 8:30 AM America/New_York, weekdays.
+# Must run before the 3:55 PM day_before capture; it is the producer all three capture windows read.
+# Vixie cron ignores CRON_TZ in user crontabs; use UTC slots + wrapper for DST.
+# Install:
+#   crontab -l 2>/dev/null | grep -v run_archive_earnings_cron.sh | cat - infra/cron/archive_earnings.cron | crontab -
+30 12,13 * * 1-5 cd /opt/afterhours-lab && tools/run_archive_earnings_cron.sh >> /opt/afterhours-lab/archive_earnings.log 2>&1
