@@ -310,8 +310,14 @@ afterhours-lab` rotates them weekly, keeping 8 compressed generations:
 
 ```bash
 sudo install -m 0644 -o root -g root infra/logrotate/afterhours-lab /etc/logrotate.d/afterhours-lab
-sudo logrotate --debug /etc/logrotate.d/afterhours-lab   # dry run, prints what it would do
+sudo logrotate -v --force /etc/logrotate.d/afterhours-lab   # verify: actually rotates once
 ```
+
+Verify with `-v --force`, not `--debug`: debug mode reports "considering log …" and
+then skips every real check, so a broken config still looks like it worked. The config
+carries `su billy billy` because the deploy directory is group-writable by `billy` —
+without it logrotate refuses every log under it with "parent directory has insecure
+permissions".
 
 It uses `copytruncate` rather than `create` on purpose: the `day_after` capture holds
 its stdout redirect open for a 395-minute run, so a rotation that renamed the file out

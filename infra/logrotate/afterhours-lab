@@ -8,6 +8,12 @@
 # would look truncated and the rest of the run would vanish. copytruncate copies then
 # truncates in place, so the open fd keeps working.
 /opt/afterhours-lab/*.log {
+    # /opt/afterhours-lab is billy:billy and group-writable, which logrotate refuses
+    # to rotate into while running as root ("parent directory has insecure
+    # permissions"). su drops it to the owning user/group for these logs rather than
+    # tightening the deploy directory, which the cron jobs and the docker bind mount
+    # both need to stay writable by billy.
+    su billy billy
     weekly
     rotate 8
     compress
