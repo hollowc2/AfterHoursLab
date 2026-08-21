@@ -5,8 +5,9 @@ import pytest
 from schwab_gateway_sdk.client import GatewayUnavailableError
 from schwab_gateway_sdk.models import QuoteResponseV1, QuoteV1
 
-from afterhours_lab import capture
+from afterhours_lab import archive_earnings, capture
 from afterhours_lab.status import status_path_for
+from afterhours_lab.trading_calendar import next_trading_day
 
 TODAY = dt.date(2026, 8, 19)  # Wednesday; window="after_hours" -> earnings_date == TODAY
 MINUTE0 = dt.datetime(2026, 8, 19, 16, 0, 0, tzinfo=dt.timezone.utc)
@@ -71,6 +72,7 @@ class FakeConnection:
         self._candles = candles
         self._lock_available = lock_available
         self.unlocked = False
+        self.lock_keys: list[int] = []
 
     async def fetch(self, sql: str, *args: object):
         assert "SELECT symbol FROM earnings_events" in sql
@@ -83,8 +85,9 @@ class FakeConnection:
         )
         return [{"symbol": s} for s in symbols]
 
-    async def fetchval(self, sql: str, *_args: object) -> bool:
+    async def fetchval(self, sql: str, *args: object) -> bool:
         assert sql.startswith("SELECT pg_try_advisory_lock")
+        self.lock_keys.append(args[0])
         return self._lock_available
 
     async def execute(self, sql: str, *args: object) -> None:
@@ -359,3 +362,85 @@ async def test_no_matching_symbols_exits_cleanly_without_locking(
     status = json.loads(_status_path(watchlist_path).read_text())
     assert status["ok"] is True
     assert "no symbols pending" in status["detail"]
+
+
+def test_each_window_gets_its_own_lock_key() -> None:
+    """The three windows must not share a key. day_after polls from 9:28 AM ET for
+    395 minutes, straight through the 3:55 PM day_before and 4:00 PM after_hours
+    fires; when all three shared one key those two took the "already running" branch
+    and skipped — recorded as a successful run — every day a day_after was active."""
+    keys = {window: capture.capture_lock_key(window) for window in capture._WINDOW_COLUMNS}
+    assert len(set(keys.values())) == 3
+
+
+def test_lock_keys_are_stable_and_distinct_from_the_other_apps_locks() -> None:
+    """Offsets are pinned, not derived from dict order: a window's key sliding onto
+    one a running process already holds would resurrect the bug above."""
+    assert capture.capture_lock_key("day_before") == capture.CAPTURE_LOCK_KEY + 0
+    assert capture.capture_lock_key("after_hours") == capture.CAPTURE_LOCK_KEY + 1
+    assert capture.capture_lock_key("day_after") == capture.CAPTURE_LOCK_KEY + 2
+    # Must not collide with the archive-earnings guard, which runs on the same host.
+    assert archive_earnings.ARCHIVE_LOCK_KEY not in {
+        capture.capture_lock_key(window) for window in capture._WINDOW_COLUMNS
+    }
+
+
+def test_lock_key_rejects_an_unknown_window() -> None:
+    with pytest.raises(KeyError):
+        capture.capture_lock_key("not_a_window")
+
+
+async def test_run_requests_the_lock_key_for_its_own_window(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End-to-end: the key actually handed to pg_try_advisory_lock is this window's,
+    not the shared base key."""
+    watchlist_path = tmp_path / "watchlist.json"
+    store = {("AAA", next_trading_day(TODAY)): event()}
+    fake_pool_class, _gateway, _candles = patch_common(
+        monkeypatch, store=store, gateway_responses=[]
+    )
+
+    exit_code = await capture._main(
+        [
+            "--window", "day_before",
+            "--duration-minutes", "0",
+            "--interval-seconds", "60",
+            "--watchlist", str(watchlist_path),
+        ],
+        today=TODAY,
+    )
+
+    assert exit_code == 0
+    requested = [
+        key
+        for acquire in fake_pool_class.acquisitions
+        if acquire.connection
+        for key in acquire.connection.lock_keys
+    ]
+    assert requested == [capture.capture_lock_key("day_before")]
+
+
+async def test_skip_message_names_the_window(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The lock is per-window, so a skip means another run of *this* window is still
+    going — the status detail has to say which, or the old ambiguous wording would
+    still read as "some capture is busy"."""
+    watchlist_path = tmp_path / "watchlist.json"
+    store = {("AAA", TODAY): event()}
+    patch_common(monkeypatch, store=store, lock_available=False, gateway_responses=[])
+
+    exit_code = await capture._main(
+        [
+            "--window", "after_hours",
+            "--duration-minutes", "5",
+            "--interval-seconds", "60",
+            "--watchlist", str(watchlist_path),
+        ],
+        today=TODAY,
+    )
+
+    assert exit_code == 0
+    status = json.loads(_status_path(watchlist_path).read_text())
+    assert status["detail"] == "after_hours capture already running; skipped this run"

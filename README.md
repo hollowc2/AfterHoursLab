@@ -302,3 +302,13 @@ crontab -l 2>/dev/null | grep -v run_capture_day_after_cron.sh | cat - infra/cro
 
 `capture_status.json` next to `watchlist.json` in `./data` tracks the outcome of the
 most recent capture run, same idea as `last_run_status.json` for archive-earnings.
+
+**Per-window re-entrancy guard.** `capture.py` holds a non-blocking advisory lock for
+its entire poll — minutes to hours — so the key has to be per-window
+(`capture_lock_key(window)` = `CAPTURE_LOCK_KEY` + a pinned per-window offset), not one
+key shared by all three. The windows overlap on the clock: `day_after` starts at
+9:28 AM ET and polls for 395 minutes, straight through the 3:55 PM `day_before` and
+4:00 PM `after_hours` fires. With a single shared key those two hit the "already
+running" branch and skipped — recorded as a *successful* run — on every day a
+`day_after` capture was active. Each window now only guards against a stuck run of
+itself, which means all three can be polling the gateway at once around 4:00 PM.

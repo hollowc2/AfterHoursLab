@@ -48,13 +48,35 @@ _WINDOW_COLUMNS = {
     "day_after": "day_after_captured",
 }
 
-# Re-entrancy guard: a third fixed advisory-lock key, distinct from db/migrate.py's
-# ADVISORY_LOCK_KEY and archive_earnings.py's ARCHIVE_LOCK_KEY, so a stuck capture run
-# (this script holds a DB connection open for the whole polling window, possibly
-# minutes to hours) can't race a fresh cron fire on the same window. Non-blocking
+# Re-entrancy guard: a third fixed advisory-lock base key, distinct from
+# db/migrate.py's ADVISORY_LOCK_KEY and archive_earnings.py's ARCHIVE_LOCK_KEY, so a
+# stuck capture run (this script holds a DB connection open for the whole polling
+# window, possibly minutes to hours) can't race a fresh cron fire. Non-blocking
 # (pg_try_advisory_lock): if a previous run still holds it, this run skips rather than
 # queuing behind a possibly wedged process.
 CAPTURE_LOCK_KEY = 0x41484C4341505452  # the 8 ASCII bytes of "AHLCAPTR" as an int64
+
+# One lock key per window, not one shared across all three. The three windows overlap
+# on the clock: day_after starts at 9:28 AM ET and polls for 395 minutes (through the
+# 4:00 PM close), while day_before fires at 3:55 PM and after_hours at 4:00 PM — both
+# inside day_after's run. A single shared key meant those two took the "already
+# running" branch and skipped, recorded as a successful run, on every day a day_after
+# capture was active. Each window now only guards against a stuck run of *itself*,
+# which is what the guard was ever meant to do.
+#
+# Offsets are written out rather than derived from _WINDOW_COLUMNS' iteration order:
+# reordering or inserting a window there must not silently slide an existing window's
+# key onto the one a running process already holds.
+_WINDOW_LOCK_OFFSETS = {
+    "day_before": 0,
+    "after_hours": 1,
+    "day_after": 2,
+}
+
+
+def capture_lock_key(window: str) -> int:
+    """The advisory-lock key guarding `window` against a concurrent run of itself."""
+    return CAPTURE_LOCK_KEY + _WINDOW_LOCK_OFFSETS[window]
 
 
 @dataclasses.dataclass
@@ -253,11 +275,14 @@ async def _run_locked(
     interval_seconds: float,
 ) -> list[str] | None:
     """Poll, aggregate, and mark symbols captured, all on one connection held for the
-    entire run under a non-blocking advisory lock. Returns None if another run
-    already holds the lock (Postgres advisory locks are session-scoped, so a single
-    connection has to span acquire, the poll loop, and the flag update)."""
+    entire run under a non-blocking advisory lock. Returns None if another run of this
+    same window already holds the lock (Postgres advisory locks are session-scoped, so
+    a single connection has to span acquire, the poll loop, and the flag update).
+
+    The lock is per-window (see capture_lock_key), so a long-running day_after poll
+    doesn't lock out the day_before and after_hours runs that fire during it."""
     async with pool.acquire() as conn:
-        async with try_advisory_lock(conn, CAPTURE_LOCK_KEY) as acquired:
+        async with try_advisory_lock(conn, capture_lock_key(window)) as acquired:
             if not acquired:
                 return None
             await _poll_and_capture(
@@ -370,7 +395,9 @@ async def _main(argv: list[str], *, today: dt.date | None = None) -> int:
             await pool.close()
 
         if captured is None:
-            msg = "capture already running; skipped this run"
+            # Names the window: the lock is per-window now, so this means another
+            # run of *this* window is still going, not merely "some capture is busy".
+            msg = f"{args.window} capture already running; skipped this run"
             print(msg)
             _record_success(status_path, msg)
             return 0
