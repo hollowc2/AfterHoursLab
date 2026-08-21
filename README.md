@@ -305,8 +305,9 @@ most recent capture run, same idea as `last_run_status.json` for archive-earning
 
 ### Log rotation
 
-The four cron entries append to `/opt/afterhours-lab/*.log` forever. `infra/logrotate/
-afterhours-lab` rotates them weekly, keeping 8 compressed generations:
+The four cron entries append to `/opt/afterhours-lab/*.log` forever.
+`infra/logrotate/afterhours-lab` rotates them weekly, keeping 8 generations — the most
+recent stays uncompressed (`delaycompress`) so it's still greppable, the rest are gzipped:
 
 ```bash
 sudo install -m 0644 -o root -g root infra/logrotate/afterhours-lab /etc/logrotate.d/afterhours-lab
