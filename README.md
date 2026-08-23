@@ -171,10 +171,20 @@ Set `DATABASE__HOST`/`PORT`/`NAME`/`USER`/`PASSWORD` in `.env`, then:
 uv run afterhours-lab-migrate
 ```
 
-The actual recording pipeline (pulling 1m candles into these tables) depends on a
-gateway-side historical-candles endpoint that doesn't exist yet — see the open design
-question in SchwabGateway about a point-in-time date+session history contract vs. its
-existing trailing-window `/v1/history`. This schema is ready ahead of that.
+The current recording pipeline does not depend on a historical-candles endpoint.
+`afterhours-lab-capture` polls the gateway's `/v1/quotes` endpoint during each
+configured capture window, aggregates the returned quotes into 1m OHLCV bars, writes
+those bars to `candles`, and then marks the matching capture flag on
+`earnings_events`. This supports live scheduled capture only; a gateway-side
+point-in-time historical-candles contract would still be needed for backfills,
+replays, or recovery after a missed window. See the open design question in
+SchwabGateway about that contract versus its existing trailing-window `/v1/history`.
+
+Capture completion currently means the polling window finished, not that every symbol
+produced a candle. If the gateway returns no usable quotes for a window, the run can
+finish successfully with no rows for that symbol while still setting its
+`*_captured` flag; inspect the capture status and stored candles before treating the
+window as complete for analysis.
 
 **Migrations are forward-only, by decision, not by omission.** `apply_migrations` in
 `db/migrate.py` has no down-migration tooling, and none is planned — this matches
