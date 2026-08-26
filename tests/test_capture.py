@@ -304,6 +304,91 @@ async def test_gateway_error_mid_run_is_caught_and_backed_off(
     assert store[("AAA", TODAY)]["after_hours_captured"] is True
 
 
+async def test_backoff_cannot_extend_capture_past_wall_clock_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = FakeGateway([GatewayUnavailableError("down")] * 20)
+    conn = FakeConnection({}, [])
+    now = 0.0
+
+    def fake_monotonic() -> float:
+        return now
+
+    async def advancing_sleep(seconds: float) -> None:
+        nonlocal now
+        now += seconds
+
+    monkeypatch.setattr(capture.time, "monotonic", fake_monotonic)
+    monkeypatch.setattr(capture.asyncio, "sleep", advancing_sleep)
+
+    observed = await capture._poll_and_capture(
+        gateway,
+        conn,
+        ["AAA"],
+        window="after_hours",
+        earnings_date=TODAY,
+        duration_minutes=1,
+        interval_seconds=5,
+    )
+
+    assert observed == set()
+    assert now == 60.0
+    assert len(gateway.calls) == 4
+
+
+async def test_no_usable_quotes_fails_without_marking_captured(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    watchlist_path = tmp_path / "watchlist.json"
+    store = {("AAA", TODAY): event()}
+    responses = [QuoteResponseV1(quotes=(make_quote(last=None),))]
+    patch_common(monkeypatch, store=store, gateway_responses=responses)
+    monkeypatch.setattr(capture.asyncio, "sleep", await _fake_sleep_recording([]))
+
+    with pytest.raises(RuntimeError, match="no usable quotes"):
+        await capture._main(
+            [
+                "--window", "after_hours",
+                "--duration-minutes", "1",
+                "--interval-seconds", "60",
+                "--watchlist", str(watchlist_path),
+            ],
+            today=TODAY,
+        )
+
+    assert store[("AAA", TODAY)]["after_hours_captured"] is False
+    status = json.loads(_status_path(watchlist_path).read_text())
+    assert status["ok"] is False
+
+
+async def test_only_symbols_with_usable_quotes_are_marked_captured(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    watchlist_path = tmp_path / "watchlist.json"
+    store = {("AAA", TODAY): event(), ("BBB", TODAY): event()}
+    responses = [
+        QuoteResponseV1(
+            quotes=(make_quote(symbol="AAA"), make_quote(symbol="BBB", last=None))
+        )
+    ]
+    patch_common(monkeypatch, store=store, gateway_responses=responses)
+    monkeypatch.setattr(capture.asyncio, "sleep", await _fake_sleep_recording([]))
+
+    exit_code = await capture._main(
+        [
+            "--window", "after_hours",
+            "--duration-minutes", "1",
+            "--interval-seconds", "60",
+            "--watchlist", str(watchlist_path),
+        ],
+        today=TODAY,
+    )
+
+    assert exit_code == 0
+    assert store[("AAA", TODAY)]["after_hours_captured"] is True
+    assert store[("BBB", TODAY)]["after_hours_captured"] is False
+
+
 async def test_still_open_final_minute_is_flushed_not_dropped(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

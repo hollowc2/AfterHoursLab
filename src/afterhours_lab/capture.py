@@ -16,6 +16,7 @@ import asyncio
 import dataclasses
 import datetime as dt
 import sys
+import time
 from pathlib import Path
 
 import structlog
@@ -200,8 +201,10 @@ async def _poll_and_capture(
     earnings_date: dt.date,
     duration_minutes: float,
     interval_seconds: float,
-) -> None:
+) -> set[str]:
     bars: dict[tuple[str, dt.datetime], _Bar] = {}
+    observed_symbols: set[str] = set()
+    deadline = time.monotonic() + duration_minutes * 60.0
 
     # Iteration count, not wall-clock duration math: the loop runs this many
     # poll-then-sleep cycles and stops, so a test can drive it deterministically by
@@ -209,11 +212,14 @@ async def _poll_and_capture(
     iterations = max(0, round((duration_minutes * 60.0) / interval_seconds))
 
     for _ in range(iterations):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
         try:
             response = await gateway.get_quotes(symbols)
         except GatewayClientError as exc:
             log.error("capture_poll_failed", error=str(exc))
-            await asyncio.sleep(BACKOFF_SECONDS)
+            await asyncio.sleep(min(BACKOFF_SECONDS, remaining))
             continue
 
         # Preserve the exact quote contract before deriving minute bars from it.
@@ -230,6 +236,7 @@ async def _poll_and_capture(
         for quote in response.quotes:
             if quote.last is None:
                 continue
+            observed_symbols.add(quote.symbol)
             minute = _bucket_minute(quote)
             if current_minute is None or minute > current_minute:
                 current_minute = minute
@@ -245,11 +252,14 @@ async def _poll_and_capture(
                 conn, bars, window=window, earnings_date=earnings_date, before=current_minute
             )
 
-        await asyncio.sleep(interval_seconds)
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            await asyncio.sleep(min(interval_seconds, remaining))
 
     # The window has ended: persist everything still in memory, including the
     # current, still-open minute.
     await _flush_ready(conn, bars, window=window, earnings_date=earnings_date, before=None)
+    return observed_symbols
 
 
 async def _mark_captured(conn, symbols: list[str], *, window: str, earnings_date: dt.date) -> None:
@@ -296,7 +306,7 @@ async def _run_locked(
         async with try_advisory_lock(conn, capture_lock_key(window)) as acquired:
             if not acquired:
                 return None
-            await _poll_and_capture(
+            observed_symbols = await _poll_and_capture(
                 gateway,
                 conn,
                 symbols,
@@ -305,8 +315,12 @@ async def _run_locked(
                 duration_minutes=duration_minutes,
                 interval_seconds=interval_seconds,
             )
-            await _mark_captured(conn, symbols, window=window, earnings_date=earnings_date)
-            return symbols
+            captured = [symbol for symbol in symbols if symbol in observed_symbols]
+            if captured:
+                await _mark_captured(
+                    conn, captured, window=window, earnings_date=earnings_date
+                )
+            return captured
 
 
 def _earnings_date_for_window(window: str, today: dt.date) -> dt.date:
@@ -412,6 +426,11 @@ async def _main(argv: list[str], *, today: dt.date | None = None) -> int:
             print(msg)
             _record_success(status_path, msg)
             return 0
+
+        if args.duration_minutes > 0 and not captured:
+            raise RuntimeError(
+                f"no usable quotes captured for {args.window} on {earnings_date}"
+            )
 
         print(f"captured {args.window} candles ({earnings_date}): {captured}")
         _record_success(

@@ -200,11 +200,11 @@ The gateway contract does not currently expose authoritative EXTO/24x5 eligibili
 exchange status, trading status, or session eligibility. Evidence rows retain these as
 NULL (unknown); the app does not infer them from clock time, symbols, or quote activity.
 
-Capture completion currently means the polling window finished, not that every symbol
-produced a candle. If the gateway returns no usable quotes for a window, the run can
-finish successfully with no rows for that symbol while still setting its
-`*_captured` flag; inspect the capture status and stored candles before treating the
-window as complete for analysis.
+Capture completion is recorded per symbol only after at least one usable last price was
+observed. Symbols without usable quotes remain pending, and a window with no usable
+quotes fails visibly instead of setting a false `*_captured` flag. A monotonic
+wall-clock deadline also prevents gateway backoff from stretching a scheduled capture
+indefinitely.
 
 **Migrations are forward-only, by decision, not by omission.** `apply_migrations` in
 `db/migrate.py` has no down-migration tooling, and none is planned — this matches
