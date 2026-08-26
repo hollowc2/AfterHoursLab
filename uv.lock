@@ -30,7 +30,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.9.0" },
     { name = "pydantic-settings", specifier = ">=2.6.0" },
     { name = "rich", specifier = ">=13.7.0" },
-    { name = "schwab-gateway-sdk", git = "https://github.com/hollowc2/SchwabGateway.git?subdirectory=packages%2Fsdk&tag=v0.1.0" },
+    { name = "schwab-gateway-sdk", git = "https://github.com/hollowc2/SchwabGateway.git?subdirectory=packages%2Fsdk&rev=5b8f1d76aa9fb97a300172d39e7afcc4ab60e83a" },
     { name = "structlog", specifier = ">=24.0.0" },
 ]
 
@@ -406,8 +406,8 @@ wheels = [
 
 [[package]]
 name = "schwab-gateway-sdk"
-version = "0.1.0"
-source = { git = "https://github.com/hollowc2/SchwabGateway.git?subdirectory=packages%2Fsdk&tag=v0.1.0#2d1da47b37ba48e3603f8d52a2fe73a55924aaf0" }
+version = "0.2.0"
+source = { git = "https://github.com/hollowc2/SchwabGateway.git?subdirectory=packages%2Fsdk&rev=5b8f1d76aa9fb97a300172d39e7afcc4ab60e83a#5b8f1d76aa9fb97a300172d39e7afcc4ab60e83a" }
 dependencies = [
     { name = "httpx" },
     { name = "pydantic" },

@@ -3,7 +3,8 @@
 A read-only market-data lab application. It has no Schwab credentials of its own and
 never will — all market data comes exclusively from the standalone internal gateway at
 [hollowc2/SchwabGateway](https://github.com/hollowc2/SchwabGateway) over its HTTP API
-(`/v1/quotes`, `/v1/spot`, `/v1/chain`), authenticated with a pre-issued internal API key.
+(`/v1/quotes`, `/v1/history`, and `/v1/session-history` for evidence collection;
+`/v1/spot` for health smoke checks), authenticated with a pre-issued internal API key.
 
 This app is registered in the gateway's auth model as:
 
@@ -70,6 +71,13 @@ Renders a live-refreshing table (last/bid/ask/mark/volume/staleness/data-quality
 flags) via `/v1/quotes`. Backs off for `BACKOFF_SECONDS` on gateway capacity or
 availability errors rather than retrying immediately, since this app is registered as
 `priority: background`.
+
+The shared client enforces an explicit request timeout, bounds concurrent gateway
+attempts, and retries only transient timeout/capacity/upstream failures with exponential
+backoff. Authentication (401), authorization (403), and malformed versioned responses
+fail closed without retrying. Defaults can be tuned with
+`SCHWAB_GATEWAY_TIMEOUT_SECONDS`, `SCHWAB_GATEWAY_MAX_CONCURRENCY`,
+`SCHWAB_GATEWAY_MAX_ATTEMPTS`, and `SCHWAB_GATEWAY_RETRY_BACKOFF_SECONDS`.
 
 ## Earnings calendar archiving
 
@@ -158,12 +166,12 @@ Butterflyguy uses — never shares credentials or a database with another app). 
 raw SQL migrations under `src/afterhours_lab/db/migrations/`, tracked in a
 `schema_migrations` ledger with a Postgres advisory lock guarding concurrent runs.
 
-Two tables: `earnings_events` (one row per flagged symbol/date — populated by
+Core tables: `earnings_events` (one row per flagged symbol/date — populated by
 `afterhours-lab-archive-earnings`, and the source of truth for what's in the watchlist)
 and `candles` (a TimescaleDB hypertable of 1m OHLCV bars, tagged with which capture
 window — `day_before` / `after_hours` / `day_after` — and which earnings event they
-belong to). The `*_captured` flags on `earnings_events` stay `FALSE` until a candles
-recording pipeline exists to set them — see below.
+belong to). `quote_evidence` and `bar_evidence` preserve the lossless versioned gateway
+contracts and provenance alongside those derived analysis candles.
 
 Set `DATABASE__HOST`/`PORT`/`NAME`/`USER`/`PASSWORD` in `.env`, then:
 
@@ -171,14 +179,26 @@ Set `DATABASE__HOST`/`PORT`/`NAME`/`USER`/`PASSWORD` in `.env`, then:
 uv run afterhours-lab-migrate
 ```
 
-The current recording pipeline does not depend on a historical-candles endpoint.
 `afterhours-lab-capture` polls the gateway's `/v1/quotes` endpoint during each
-configured capture window, aggregates the returned quotes into 1m OHLCV bars, writes
-those bars to `candles`, and then marks the matching capture flag on
-`earnings_events`. This supports live scheduled capture only; a gateway-side
-point-in-time historical-candles contract would still be needed for backfills,
-replays, or recovery after a missed window. See the open design question in
-SchwabGateway about that contract versus its existing trailing-window `/v1/history`.
+configured capture window. It preserves each versioned quote in `quote_evidence`
+(including source timestamps, session, bid/ask, last, mark, volume, staleness, and
+quality flags), aggregates the quotes into 1m OHLCV bars in `candles`, and marks the
+matching capture flag on `earnings_events`.
+
+For bounded one-shot recovery or research collection, the history command preserves
+gateway OHLCV and upstream provenance in `bar_evidence`:
+
+```bash
+# authoritative dated session designation from /v1/session-history
+uv run afterhours-lab-collect-history AAPL MSFT --date 2026-08-25
+
+# trailing minute bars from /v1/history; session is explicitly stored as unknown
+uv run afterhours-lab-collect-history AAPL --days-back 2
+```
+
+The gateway contract does not currently expose authoritative EXTO/24x5 eligibility,
+exchange status, trading status, or session eligibility. Evidence rows retain these as
+NULL (unknown); the app does not infer them from clock time, symbols, or quote activity.
 
 Capture completion currently means the polling window finished, not that every symbol
 produced a candle. If the gateway returns no usable quotes for a window, the run can

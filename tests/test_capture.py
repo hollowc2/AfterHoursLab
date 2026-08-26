@@ -101,6 +101,8 @@ class FakeConnection:
             self._store[(symbol, earnings_date)][column] = True
 
     async def executemany(self, sql: str, rows) -> None:
+        if sql.strip().startswith("INSERT INTO quote_evidence"):
+            return
         assert sql.strip().startswith("INSERT INTO candles")
         self._candles.extend(rows)
 

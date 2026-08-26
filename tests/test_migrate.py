@@ -5,6 +5,7 @@ def test_discover_migrations_finds_initial_migration() -> None:
     migrations = discover_migrations()
     versions = [m.version for m in migrations]
     assert "001_initial" in versions
+    assert "003_gateway_evidence" in versions
 
 
 def test_discover_migrations_orders_by_filename(tmp_path) -> None:

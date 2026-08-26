@@ -27,6 +27,7 @@ from afterhours_lab.config import AppSettings
 from afterhours_lab.db.advisory_lock import try_advisory_lock
 from afterhours_lab.db.config import DatabaseSettings
 from afterhours_lab.db.connection import DatabasePool
+from afterhours_lab.evidence import preserve_quotes
 from afterhours_lab.gateway import build_gateway_client
 from afterhours_lab.status import status_path_for, write_status
 from afterhours_lab.trading_calendar import next_trading_day, previous_trading_day
@@ -214,6 +215,16 @@ async def _poll_and_capture(
             log.error("capture_poll_failed", error=str(exc))
             await asyncio.sleep(BACKOFF_SECONDS)
             continue
+
+        # Preserve the exact quote contract before deriving minute bars from it.
+        # This retains bid/ask/mark, both gateway timestamps, and provenance that an
+        # OHLCV aggregate necessarily loses.
+        await preserve_quotes(
+            conn,
+            response,
+            capture_window=window,
+            earnings_date=earnings_date,
+        )
 
         current_minute: dt.datetime | None = None
         for quote in response.quotes:
