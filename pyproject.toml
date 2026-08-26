@@ -23,6 +23,8 @@ afterhours-lab-archive-earnings = "afterhours_lab.archive_earnings:main"
 afterhours-lab-migrate = "afterhours_lab.db.migrate:main"
 afterhours-lab-capture = "afterhours_lab.capture:main"
 afterhours-lab-collect-history = "afterhours_lab.collect_history:main"
+afterhours-lab-capture-ohlcv = "afterhours_lab.capture_ohlcv:main"
+afterhours-lab-audit-ohlcv = "afterhours_lab.audit_ohlcv:main"
 afterhours-lab-moves = "afterhours_lab.moves:main"
 
 [build-system]

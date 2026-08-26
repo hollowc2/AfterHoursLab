@@ -1,0 +1,5 @@
+# AfterHoursLab authoritative OHLCV phases, DST-safe via New York time gate.
+# 09:35 and 16:05 ET fire on local weekdays; 20:05 ET is 00:05/01:05 UTC next day.
+35 13,14 * * 1-5 cd /opt/afterhours-lab && tools/run_capture_ohlcv_cron.sh >> /opt/afterhours-lab/capture_ohlcv.log 2>&1
+5 20,21 * * 1-5 cd /opt/afterhours-lab && tools/run_capture_ohlcv_cron.sh >> /opt/afterhours-lab/capture_ohlcv.log 2>&1
+5 0,1 * * 2-6 cd /opt/afterhours-lab && tools/run_capture_ohlcv_cron.sh >> /opt/afterhours-lab/capture_ohlcv.log 2>&1

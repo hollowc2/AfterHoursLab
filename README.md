@@ -179,11 +179,39 @@ Set `DATABASE__HOST`/`PORT`/`NAME`/`USER`/`PASSWORD` in `.env`, then:
 uv run afterhours-lab-migrate
 ```
 
-`afterhours-lab-capture` polls the gateway's `/v1/quotes` endpoint during each
-configured capture window. It preserves each versioned quote in `quote_evidence`
-(including source timestamps, session, bid/ask, last, mark, volume, staleness, and
-quality flags), aggregates the quotes into 1m OHLCV bars in `candles`, and marks the
-matching capture flag on `earnings_events`.
+The primary OHLCV workflow uses exact dated `/v1/session-history` reads. For an
+after-close report on date D it records four independently auditable phases:
+
+- `earnings_regular`: D, 9:30 AM-4:00 PM ET
+- `earnings_postmarket`: D, 4:00-8:00 PM ET
+- `following_premarket`: next trading day, 4:00-9:30 AM ET
+- `following_regular`: next trading day, 9:30 AM-4:00 PM ET
+
+Raw normalized bars remain in `bar_evidence`. `earnings_ohlcv_coverage` records the
+event/phase mapping, expected boundaries and minutes, observed first/last timestamps
+and count, provider, retrieval time, response SHA-256, and gateway quality flags. A
+missing minute is disclosed; it is never filled or inferred.
+
+Phase boundaries use `America/New_York`. The cron wrapper passes the New York calendar
+date explicitly, which avoids assigning the 8:05 PM ET run to the next UTC date. The
+current trading-day helper skips weekends but does not yet carry an exchange-holiday
+or early-close calendar; the coverage audit will therefore expose shortened sessions
+as gaps instead of silently treating them as complete.
+
+```bash
+uv run afterhours-lab-capture-ohlcv --phase earnings_regular --market-date 2026-08-26
+uv run afterhours-lab-capture-ohlcv --phase earnings_postmarket --market-date 2026-08-26
+uv run afterhours-lab-capture-ohlcv --phase following_premarket --market-date 2026-08-27
+uv run afterhours-lab-capture-ohlcv --phase following_regular --market-date 2026-08-27
+
+# verify all four phases, or narrow to selected symbols
+uv run afterhours-lab-audit-ohlcv --date 2026-08-26
+uv run afterhours-lab-audit-ohlcv --date 2026-08-26 NVDA CRM
+```
+
+The older `afterhours-lab-capture` command remains available for supplementary quote
+snapshots, but its short `day_before`/`after_hours`/`day_after` schedule is superseded
+by the authoritative OHLCV workflow above.
 
 For bounded one-shot recovery or research collection, the history command preserves
 gateway OHLCV and upstream provenance in `bar_evidence`:
@@ -294,23 +322,22 @@ quick check of the last cron outcome, without opening the log:
 cat /opt/afterhours-lab/data/last_run_status.json
 ```
 
-### Cron install (archive-earnings + the three capture windows)
+### Cron install (archive-earnings + authoritative OHLCV phases)
 
-Four cron entries, each timed to a specific point in the trading day (see the matching
-`tools/run_*_cron.sh` for why each timing was chosen):
+The OHLCV wrapper performs bounded point-in-time reads after each phase is available:
 
 | Entry | ET time | What it does |
 | --- | --- | --- |
 | `archive_earnings` | 8:30 AM | Refreshes `earnings_events` and `watchlist.json` |
-| `capture_day_before` | 3:55 PM | Pre-earnings closing candles |
-| `capture_after_hours` | 4:00 PM | The earnings-reaction window |
-| `capture_day_after` | 9:28 AM | Next session, open through close |
+| `capture_ohlcv` | 9:35 AM | Prior event's following-day premarket |
+| `capture_ohlcv` | 4:05 PM | Today's regular + prior event's following regular |
+| `capture_ohlcv` | 8:05 PM | Today's complete postmarket |
 
-**`archive_earnings` is the producer the other three read** — `capture.py` picks its
+**`archive_earnings` is the producer the other three read** — `capture_ohlcv.py` picks its
 symbols out of `earnings_events`, so a day this doesn't run is a day nothing gets
 captured. It goes at 8:30 AM ET to sit between the two things it serves: late enough
-that the previous evening's after-close prints have published actuals, and well ahead
-of the 3:55 PM `day_before` capture, which needs tomorrow's names already in the table.
+that the previous evening's after-close prints have published actuals, and before the
+9:30 AM regular-session open for today's after-close names.
 
 All four are timing-sensitive enough that a plain single-UTC-slot cron line isn't good
 enough across a DST transition — each one follows Butterflyguy's
@@ -325,17 +352,19 @@ same host:
 
 ```bash
 crontab -l 2>/dev/null | grep -v run_archive_earnings_cron.sh | cat - infra/cron/archive_earnings.cron | crontab -
-crontab -l 2>/dev/null | grep -v run_capture_day_before_cron.sh | cat - infra/cron/capture_day_before.cron | crontab -
-crontab -l 2>/dev/null | grep -v run_capture_after_hours_cron.sh | cat - infra/cron/capture_after_hours.cron | crontab -
-crontab -l 2>/dev/null | grep -v run_capture_day_after_cron.sh | cat - infra/cron/capture_day_after.cron | crontab -
+crontab -l 2>/dev/null | grep -v run_capture_ohlcv_cron.sh | cat - infra/cron/capture_ohlcv.cron | crontab -
 ```
 
-`capture_status.json` next to `watchlist.json` in `./data` tracks the outcome of the
-most recent capture run, same idea as `last_run_status.json` for archive-earnings.
+When upgrading from the quote-polling schedule, remove its three legacy wrapper lines
+before installing `capture_ohlcv.cron`; running both schedules would duplicate traffic
+and preserve two different notions of coverage.
+
+The collector also takes one non-blocking Postgres advisory lock for the whole batch.
+An overlapping cron or manual run skips instead of issuing duplicate gateway reads.
 
 ### Log rotation
 
-The four cron entries append to `/opt/afterhours-lab/*.log` forever.
+The cron entries append to `/opt/afterhours-lab/*.log` forever.
 `infra/logrotate/afterhours-lab` rotates them weekly, keeping 8 generations — the most
 recent stays uncompressed (`delaycompress`) so it's still greppable, the rest are gzipped:
 
@@ -350,17 +379,5 @@ carries `su billy billy` because the deploy directory is group-writable by `bill
 without it logrotate refuses every log under it with "parent directory has insecure
 permissions".
 
-It uses `copytruncate` rather than `create` on purpose: the `day_after` capture holds
-its stdout redirect open for a 395-minute run, so a rotation that renamed the file out
-from under it would leave the container writing to an unlinked inode for the rest of
-the session.
-
-**Per-window re-entrancy guard.** `capture.py` holds a non-blocking advisory lock for
-its entire poll — minutes to hours — so the key has to be per-window
-(`capture_lock_key(window)` = `CAPTURE_LOCK_KEY` + a pinned per-window offset), not one
-key shared by all three. The windows overlap on the clock: `day_after` starts at
-9:28 AM ET and polls for 395 minutes, straight through the 3:55 PM `day_before` and
-4:00 PM `after_hours` fires. With a single shared key those two hit the "already
-running" branch and skipped — recorded as a *successful* run — on every day a
-`day_after` capture was active. Each window now only guards against a stuck run of
-itself, which means all three can be polling the gateway at once around 4:00 PM.
+It uses `copytruncate` rather than `create` so any active cron/container stdout file
+descriptor remains attached to the current pathname while rotation occurs.
