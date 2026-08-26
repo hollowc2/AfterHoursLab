@@ -11,12 +11,14 @@ def test_render_makes_missing_phases_explicit() -> None:
                 "expected_minutes": 390,
                 "observed_first": "first",
                 "observed_last": "last",
+                "calendar": "XNYS",
+                "calendar_version": "4.13.2",
                 "response_sha256": "a" * 64,
                 "data_quality_flags": [],
             }
         ]
     )
-    assert f"AAPL\tearnings_regular\t389/390\tfirst\tlast\t{'a' * 64}\t-" in text
+    assert f"AAPL\tearnings_regular\t389/390\tfirst\tlast\tXNYS@4.13.2\t{'a' * 64}\t-" in text
     assert "AAPL\tearnings_postmarket\tMISSING" in text
     assert "AAPL\tfollowing_premarket\tMISSING" in text
     assert "AAPL\tfollowing_regular\tMISSING" in text

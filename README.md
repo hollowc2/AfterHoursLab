@@ -192,11 +192,12 @@ event/phase mapping, expected boundaries and minutes, observed first/last timest
 and count, provider, retrieval time, response SHA-256, and gateway quality flags. A
 missing minute is disclosed; it is never filled or inferred.
 
-Phase boundaries use `America/New_York`. The cron wrapper passes the New York calendar
-date explicitly, which avoids assigning the 8:05 PM ET run to the next UTC date. The
-current trading-day helper skips weekends but does not yet carry an exchange-holiday
-or early-close calendar; the coverage audit will therefore expose shortened sessions
-as gaps instead of silently treating them as complete.
+Phase boundaries use `America/New_York` and the `XNYS` schedule from
+`exchange-calendars`. Holidays are skipped, regular phases use the scheduled open and
+close, and postmarket begins at the scheduled close (including early-close days).
+Coverage records the calendar identifier and package version used. The cron wrapper
+passes the New York calendar date explicitly, which avoids assigning the 8:05 PM ET
+run to the next UTC date.
 
 ```bash
 uv run afterhours-lab-capture-ohlcv --phase earnings_regular --market-date 2026-08-26

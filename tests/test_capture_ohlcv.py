@@ -72,6 +72,18 @@ def test_phase_dates_use_earnings_day_and_following_trading_day() -> None:
     )
 
 
+def test_phase_bounds_follow_scheduled_early_close() -> None:
+    early_close = dt.date(2026, 11, 27)
+    assert capture_ohlcv.phase_bounds(capture_ohlcv.PHASES["earnings_regular"], early_close) == (
+        dt.datetime(2026, 11, 27, 14, 30, tzinfo=UTC),
+        dt.datetime(2026, 11, 27, 18, 0, tzinfo=UTC),
+    )
+    assert capture_ohlcv.phase_bounds(capture_ohlcv.PHASES["earnings_postmarket"], early_close) == (
+        dt.datetime(2026, 11, 27, 18, 0, tzinfo=UTC),
+        dt.datetime(2026, 11, 28, 1, 0, tzinfo=UTC),
+    )
+
+
 async def test_postmarket_coverage_filters_out_premarket_and_regular(monkeypatch) -> None:
     item = response("AAPL", dt.date(2026, 8, 26), "extended")
     conn = FakeConnection()
@@ -112,3 +124,11 @@ async def test_premarket_phase_links_market_date_to_prior_earnings_date(monkeypa
     assert args[3] == dt.date(2026, 8, 26)
     assert args[9] == 1
     assert args[10] == 330
+
+
+async def test_main_skips_exchange_holiday_before_connecting(capsys) -> None:
+    result = await capture_ohlcv._main(
+        ["--phase", "earnings_regular", "--market-date", "2026-11-26"]
+    )
+    assert result == 0
+    assert "not an XNYS session; skipped" in capsys.readouterr().out

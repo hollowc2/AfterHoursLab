@@ -18,7 +18,13 @@ from afterhours_lab.db.config import DatabaseSettings
 from afterhours_lab.db.connection import DatabasePool
 from afterhours_lab.evidence import preserve_session_history
 from afterhours_lab.gateway import BoundedGatewayClient, build_gateway_client
-from afterhours_lab.trading_calendar import previous_trading_day
+from afterhours_lab.trading_calendar import (
+    CALENDAR_NAME,
+    CALENDAR_VERSION,
+    is_trading_day,
+    previous_trading_day,
+    regular_session_bounds,
+)
 
 EASTERN = ZoneInfo("America/New_York")
 
@@ -55,10 +61,12 @@ def phase_dates(phase: Phase, market_date: dt.date) -> tuple[dt.date, dt.date]:
 
 
 def phase_bounds(phase: Phase, market_date: dt.date) -> tuple[dt.datetime, dt.datetime]:
-    return (
-        dt.datetime.combine(market_date, phase.start, EASTERN),
-        dt.datetime.combine(market_date, phase.end, EASTERN),
-    )
+    market_open, market_close = regular_session_bounds(market_date)
+    if phase.session == "regular":
+        return market_open, market_close
+    if phase.follows_earnings:
+        return dt.datetime.combine(market_date, phase.start, EASTERN), market_open
+    return market_close, dt.datetime.combine(market_date, phase.end, EASTERN)
 
 
 async def _symbols(conn, earnings_date: dt.date) -> list[str]:
@@ -93,8 +101,8 @@ async def _record_coverage(
             symbol, earnings_date, phase, market_date, session,
             expected_start, expected_end, observed_first, observed_last,
             observed_minutes, expected_minutes, source, gateway_received_at,
-            response_sha256, data_quality_flags
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+            response_sha256, data_quality_flags, calendar, calendar_version
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
         ON CONFLICT (symbol, earnings_date, phase) DO UPDATE SET
             market_date=EXCLUDED.market_date, session=EXCLUDED.session,
             expected_start=EXCLUDED.expected_start, expected_end=EXCLUDED.expected_end,
@@ -103,7 +111,9 @@ async def _record_coverage(
             expected_minutes=EXCLUDED.expected_minutes, source=EXCLUDED.source,
             gateway_received_at=EXCLUDED.gateway_received_at,
             response_sha256=EXCLUDED.response_sha256,
-            data_quality_flags=EXCLUDED.data_quality_flags, retrieved_at=now()
+            data_quality_flags=EXCLUDED.data_quality_flags,
+            calendar=EXCLUDED.calendar, calendar_version=EXCLUDED.calendar_version,
+            retrieved_at=now()
         """,
         response.session_history.symbol,
         earnings_date,
@@ -120,6 +130,8 @@ async def _record_coverage(
         response.session_history.gateway_received_at,
         hashlib.sha256(response.model_dump_json().encode()).hexdigest(),
         flags,
+        CALENDAR_NAME,
+        CALENDAR_VERSION,
     )
 
 
@@ -146,6 +158,9 @@ async def capture_phase(
 
 async def _main(argv: list[str]) -> int:
     args = parse_args(argv)
+    if not is_trading_day(args.market_date):
+        print(f"{args.market_date} is not an {CALENDAR_NAME} session; skipped")
+        return 0
     pool = await DatabasePool.connect(DatabaseSettings())
     try:
         async with build_gateway_client(AppSettings()) as gateway:

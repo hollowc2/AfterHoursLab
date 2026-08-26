@@ -26,7 +26,8 @@ async def audit(conn, earnings_date: dt.date, symbols: list[str]) -> list[dict]:
         SELECT e.symbol, c.phase, c.market_date, c.session, c.expected_start,
                c.expected_end, c.observed_first, c.observed_last,
                c.observed_minutes, c.expected_minutes, c.data_quality_flags,
-               c.gateway_received_at, c.response_sha256
+               c.gateway_received_at, c.response_sha256, c.calendar,
+               c.calendar_version
         FROM earnings_events e
         LEFT JOIN earnings_ohlcv_coverage c
           ON c.symbol=e.symbol AND c.earnings_date=e.earnings_date
@@ -47,17 +48,18 @@ def render(rows: list[dict]) -> str:
         by_symbol.setdefault(row["symbol"], {})
         if row["phase"] is not None:
             by_symbol[row["symbol"]][row["phase"]] = row
-    lines = ["symbol\tphase\tobserved/expected\tfirst\tlast\tsha256\tflags"]
+    lines = ["symbol\tphase\tobserved/expected\tfirst\tlast\tcalendar\tsha256\tflags"]
     for symbol, phases in by_symbol.items():
         for phase in PHASES:
             row = phases.get(phase)
             if row is None:
-                lines.append(f"{symbol}\t{phase}\tMISSING\t-\t-\t-\t-")
+                lines.append(f"{symbol}\t{phase}\tMISSING\t-\t-\t-\t-\t-")
                 continue
             flags = ",".join(row["data_quality_flags"]) or "-"
             lines.append(
                 f"{symbol}\t{phase}\t{row['observed_minutes']}/{row['expected_minutes']}\t"
                 f"{row['observed_first'] or '-'}\t{row['observed_last'] or '-'}\t"
+                f"{row['calendar']}@{row['calendar_version']}\t"
                 f"{row['response_sha256']}\t{flags}"
             )
     return "\n".join(lines)

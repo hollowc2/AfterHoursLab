@@ -18,6 +18,8 @@ CREATE TABLE earnings_ohlcv_coverage (
     gateway_received_at TIMESTAMPTZ NOT NULL,
     response_sha256 TEXT NOT NULL CHECK (response_sha256 ~ '^[0-9a-f]{64}$'),
     data_quality_flags TEXT[] NOT NULL,
+    calendar TEXT NOT NULL CHECK (calendar = 'XNYS'),
+    calendar_version TEXT NOT NULL,
     retrieved_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (symbol, earnings_date, phase),
     FOREIGN KEY (symbol, earnings_date)
