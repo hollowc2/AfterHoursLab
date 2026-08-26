@@ -261,7 +261,7 @@ mkdir -p data
 # writable by that uid or archive-earnings will crash on the watchlist write
 sudo chown 1001:1001 data
 cat > .env <<'EOF'
-SCHWAB_GATEWAY_URL=http://schwab-gateway:8011
+SCHWAB_GATEWAY_URL=http://schwab-gateway-candidate:8012
 SCHWAB_GATEWAY_API_KEY=<the afterhours-lab gateway key>
 FINNHUB_API_KEY=<finnhub key>
 DATABASE__HOST=timescaledb

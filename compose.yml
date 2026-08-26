@@ -5,6 +5,10 @@ services:
     build: .
     image: afterhours-lab:latest
     env_file: .env
+    environment:
+      # Keep the secret-bearing .env untouched while routing this app to the
+      # loopback-only candidate through its existing monitoring_net alias.
+      SCHWAB_GATEWAY_URL: http://schwab-gateway-candidate:8012
     volumes:
       - "./data:/app/data"
     networks:
