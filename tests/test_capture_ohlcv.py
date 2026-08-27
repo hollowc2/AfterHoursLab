@@ -84,6 +84,14 @@ def test_phase_bounds_follow_scheduled_early_close() -> None:
     )
 
 
+def test_premarket_bounds_match_schwab_session() -> None:
+    market_date = dt.date(2026, 8, 27)
+    assert capture_ohlcv.phase_bounds(capture_ohlcv.PHASES["following_premarket"], market_date) == (
+        dt.datetime(2026, 8, 27, 11, 0, tzinfo=UTC),
+        dt.datetime(2026, 8, 27, 13, 30, tzinfo=UTC),
+    )
+
+
 async def test_postmarket_coverage_filters_out_premarket_and_regular(monkeypatch) -> None:
     item = response("AAPL", dt.date(2026, 8, 26), "extended")
     conn = FakeConnection()
@@ -123,7 +131,7 @@ async def test_premarket_phase_links_market_date_to_prior_earnings_date(monkeypa
     assert args[1] == dt.date(2026, 8, 25)
     assert args[3] == dt.date(2026, 8, 26)
     assert args[9] == 1
-    assert args[10] == 330
+    assert args[10] == 150
 
 
 async def test_main_skips_exchange_holiday_before_connecting(capsys) -> None:

@@ -184,7 +184,8 @@ after-close report on date D it records four independently auditable phases:
 
 - `earnings_regular`: D, 9:30 AM-4:00 PM ET
 - `earnings_postmarket`: D, 4:00-8:00 PM ET
-- `following_premarket`: next trading day, 4:00-9:30 AM ET
+- `following_premarket`: next trading day, 7:00-9:30 AM ET
+  (4:00-6:30 AM Pacific)
 - `following_regular`: next trading day, 9:30 AM-4:00 PM ET
 
 Raw normalized bars remain in `bar_evidence`. `earnings_ohlcv_coverage` records the
@@ -197,7 +198,9 @@ Phase boundaries use `America/New_York` and the `XNYS` schedule from
 close, and postmarket begins at the scheduled close (including early-close days).
 Coverage records the calendar identifier and package version used. The cron wrapper
 passes the New York calendar date explicitly, which avoids assigning the 8:05 PM ET
-run to the next UTC date.
+run to the next UTC date. The premarket evidence boundary follows Schwab's available
+session-history window, 7:00-9:30 AM ET (4:00-6:30 AM Pacific); it is not treated as
+the broader exchange-wide 4:00 AM ET premarket.
 
 ```bash
 uv run afterhours-lab-capture-ohlcv --phase earnings_regular --market-date 2026-08-26

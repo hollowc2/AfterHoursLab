@@ -43,7 +43,7 @@ class Phase:
 PHASES = {
     "earnings_regular": Phase("regular", dt.time(9, 30), dt.time(16, 0)),
     "earnings_postmarket": Phase("extended", dt.time(16, 0), dt.time(20, 0)),
-    "following_premarket": Phase("extended", dt.time(4, 0), dt.time(9, 30), follows_earnings=True),
+    "following_premarket": Phase("extended", dt.time(7, 0), dt.time(9, 30), follows_earnings=True),
     "following_regular": Phase("regular", dt.time(9, 30), dt.time(16, 0), follows_earnings=True),
 }
 
