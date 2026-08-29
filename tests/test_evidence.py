@@ -111,13 +111,31 @@ async def test_minute_history_preserves_ohlcv_provenance_and_unknown_session() -
     assert row[:9] == (
         "AAPL", EVENT, "unknown", EVENT.date(), 225.0, 226.0, 224.5, 225.5, 1200
     )
-    assert row[9:18] == (EVENT, RECEIVED, "schwab", "/v1/history", "minute", False, 1.0, [], "1.0")
-    assert row[18:] == (None, None, None, None)
+    assert row[9:19] == (
+        EVENT,
+        RECEIVED,
+        "schwab",
+        "/v1/history",
+        "minute",
+        False,
+        1.0,
+        [],
+        "1.0",
+        "manual_collection",
+    )
+    assert row[19:] == (None, None, None, None)
 
 
 async def test_daily_history_is_rejected() -> None:
     with pytest.raises(ValueError, match="only minute"):
         await preserve_minute_history(FakeConnection(), history_response(frequency="daily"))
+
+
+async def test_unknown_collection_mode_is_rejected() -> None:
+    with pytest.raises(ValueError, match="unsupported bar collection mode"):
+        await preserve_minute_history(
+            FakeConnection(), history_response(), collection_mode="captured_live"
+        )
 
 
 async def test_extended_session_history_preserves_authoritative_session_and_date() -> None:
@@ -131,7 +149,8 @@ async def test_extended_session_history_preserves_authoritative_session_and_date
     )
     conn = FakeConnection()
 
-    await preserve_session_history(conn, response)
+    await preserve_session_history(conn, response, collection_mode="historical_backfill")
 
     assert conn.rows[0][2:4] == ("extended", dt.date(2026, 8, 25))
     assert conn.rows[0][12:14] == ("/v1/session-history", "minute")
+    assert conn.rows[0][18] == "historical_backfill"

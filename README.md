@@ -211,7 +211,17 @@ uv run afterhours-lab-capture-ohlcv --phase following_regular --market-date 2026
 # verify all four phases, or narrow to selected symbols
 uv run afterhours-lab-audit-ohlcv --date 2026-08-26
 uv run afterhours-lab-audit-ohlcv --date 2026-08-26 NVDA CRM
+
+# recover only missing historical coverage; existing phase coverage is refused
+uv run afterhours-lab-capture-ohlcv --historical-backfill --symbol GEG \
+  --phase earnings_regular --phase earnings_postmarket --market-date 2026-08-26
 ```
+
+Historical recovery is recorded as `historical_backfill` on both raw bar evidence
+and phase coverage. It never replaces an existing coverage row and must not be
+described as evidence captured live. Scheduled captures are recorded separately as
+`scheduled_capture`; older raw bars that predate this field remain
+`legacy_unspecified`.
 
 The older `afterhours-lab-capture` command remains available for supplementary quote
 snapshots, but its short `day_before`/`after_hours`/`day_after` schedule is superseded

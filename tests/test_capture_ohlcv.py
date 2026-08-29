@@ -1,5 +1,6 @@
 import datetime as dt
 
+import pytest
 from schwab_gateway_sdk.models import SessionHistoryResponseV1
 
 from afterhours_lab import capture_ohlcv
@@ -40,14 +41,18 @@ def response(symbol: str, date: dt.date, session: str) -> SessionHistoryResponse
 
 
 class FakeConnection:
-    def __init__(self) -> None:
+    def __init__(self, *, coverage_exists: bool = False) -> None:
         self.executed: list[tuple] = []
+        self.coverage_exists = coverage_exists
 
     async def fetch(self, _sql, *_args):
         return [{"symbol": "AAPL"}]
 
     async def execute(self, sql, *args):
         self.executed.append((sql, args))
+
+    async def fetchval(self, _sql, *_args):
+        return self.coverage_exists
 
 
 class FakeGateway:
@@ -98,8 +103,8 @@ async def test_postmarket_coverage_filters_out_premarket_and_regular(monkeypatch
     gateway = FakeGateway(item)
     preserved: list[object] = []
 
-    async def fake_preserve(_conn, value):
-        preserved.append(value)
+    async def fake_preserve(_conn, value, **kwargs):
+        preserved.append((value, kwargs))
 
     monkeypatch.setattr(capture_ohlcv, "preserve_session_history", fake_preserve)
     count = await capture_ohlcv.capture_phase(
@@ -108,12 +113,13 @@ async def test_postmarket_coverage_filters_out_premarket_and_regular(monkeypatch
 
     assert count == 1
     assert gateway.calls == [("AAPL", dt.date(2026, 8, 26), "extended")]
-    assert preserved == [item]  # raw response is retained unchanged
+    assert preserved == [(item, {"collection_mode": "scheduled_capture"})]
     args = conn.executed[0][1]
     assert args[2] == "earnings_postmarket"
     assert args[9] == 1
     assert args[10] == 240
     assert args[7] == dt.datetime(2026, 8, 26, 21, tzinfo=UTC)
+    assert args[17] == "scheduled_capture"
 
 
 async def test_premarket_phase_links_market_date_to_prior_earnings_date(monkeypatch) -> None:
@@ -121,7 +127,7 @@ async def test_premarket_phase_links_market_date_to_prior_earnings_date(monkeypa
     conn = FakeConnection()
     gateway = FakeGateway(item)
 
-    async def fake_preserve(_conn, _value):
+    async def fake_preserve(_conn, _value, **_kwargs):
         return None
 
     monkeypatch.setattr(capture_ohlcv, "preserve_session_history", fake_preserve)
@@ -132,6 +138,86 @@ async def test_premarket_phase_links_market_date_to_prior_earnings_date(monkeypa
     assert args[3] == dt.date(2026, 8, 26)
     assert args[9] == 1
     assert args[10] == 150
+
+
+def test_historical_backfill_requires_one_valid_symbol() -> None:
+    args = capture_ohlcv.parse_args(
+        [
+            "--historical-backfill",
+            "--symbol",
+            "geg",
+            "--phase",
+            "earnings_regular",
+            "--market-date",
+            "2026-08-26",
+        ]
+    )
+    assert args.symbol == "GEG"
+    assert args.historical_backfill is True
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["--historical-backfill", "--phase", "earnings_regular"],
+        ["--symbol", "GEG", "--phase", "earnings_regular"],
+        [
+            "--historical-backfill",
+            "--symbol",
+            "GEG;DROP",
+            "--phase",
+            "earnings_regular",
+        ],
+    ],
+)
+def test_historical_backfill_rejects_unsafe_or_incomplete_scope(argv) -> None:
+    with pytest.raises(SystemExit):
+        capture_ohlcv.parse_args(argv)
+
+
+async def test_historical_backfill_labels_raw_bars_and_coverage(monkeypatch) -> None:
+    item = response("AAPL", dt.date(2026, 8, 26), "regular")
+    conn = FakeConnection()
+    gateway = FakeGateway(item)
+    preserved: list[tuple] = []
+
+    async def fake_preserve(_conn, value, **kwargs):
+        preserved.append((value, kwargs))
+
+    monkeypatch.setattr(capture_ohlcv, "preserve_session_history", fake_preserve)
+    count = await capture_ohlcv.capture_phase(
+        gateway,
+        conn,
+        "earnings_regular",
+        dt.date(2026, 8, 26),
+        symbol="AAPL",
+        collection_mode="historical_backfill",
+    )
+
+    assert count == 1
+    assert gateway.calls == [("AAPL", dt.date(2026, 8, 26), "regular")]
+    assert preserved == [(item, {"collection_mode": "historical_backfill"})]
+    assert conn.executed[0][1][17] == "historical_backfill"
+    assert "earnings_ohlcv_coverage.collection_mode = 'scheduled_capture'" in (
+        conn.executed[0][0]
+    )
+
+
+async def test_historical_backfill_refuses_existing_coverage() -> None:
+    item = response("AAPL", dt.date(2026, 8, 26), "regular")
+    conn = FakeConnection(coverage_exists=True)
+    gateway = FakeGateway(item)
+
+    with pytest.raises(ValueError, match="coverage already exists"):
+        await capture_ohlcv.capture_phase(
+            gateway,
+            conn,
+            "earnings_regular",
+            dt.date(2026, 8, 26),
+            symbol="AAPL",
+            collection_mode="historical_backfill",
+        )
+    assert gateway.calls == []
 
 
 async def test_main_skips_exchange_holiday_before_connecting(capsys) -> None:

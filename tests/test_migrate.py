@@ -8,6 +8,7 @@ def test_discover_migrations_finds_initial_migration() -> None:
     assert "003_gateway_evidence" in versions
     assert "004_earnings_ohlcv_coverage" in versions
     assert "005_schwab_premarket_boundary" in versions
+    assert "006_ohlcv_collection_mode" in versions
 
 
 def test_discover_migrations_orders_by_filename(tmp_path) -> None:

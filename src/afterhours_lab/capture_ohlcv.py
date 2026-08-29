@@ -7,6 +7,7 @@ import asyncio
 import dataclasses
 import datetime as dt
 import hashlib
+import re
 import sys
 from zoneinfo import ZoneInfo
 
@@ -52,7 +53,20 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Capture dated earnings OHLCV evidence")
     parser.add_argument("--phase", action="append", choices=sorted(PHASES), required=True)
     parser.add_argument("--market-date", type=dt.date.fromisoformat, default=dt.date.today())
-    return parser.parse_args(argv)
+    parser.add_argument(
+        "--historical-backfill",
+        action="store_true",
+        help="recover one symbol without replacing existing phase coverage",
+    )
+    parser.add_argument("--symbol", help="single earnings symbol for historical backfill")
+    args = parser.parse_args(argv)
+    if args.historical_backfill != bool(args.symbol):
+        parser.error("--historical-backfill and --symbol must be used together")
+    if args.symbol:
+        args.symbol = args.symbol.strip().upper()
+        if not re.fullmatch(r"[A-Z][A-Z0-9.-]{0,9}", args.symbol):
+            parser.error("--symbol must be a valid equity symbol")
+    return args
 
 
 def phase_dates(phase: Phase, market_date: dt.date) -> tuple[dt.date, dt.date]:
@@ -85,7 +99,10 @@ async def _record_coverage(
     phase_name: str,
     earnings_date: dt.date,
     market_date: dt.date,
+    collection_mode: str,
 ) -> None:
+    if collection_mode not in {"scheduled_capture", "historical_backfill"}:
+        raise ValueError(f"unsupported OHLCV collection mode: {collection_mode}")
     phase = PHASES[phase_name]
     start, end = phase_bounds(phase, market_date)
     candles = tuple(bar for bar in response.session_history.candles if start <= bar.timestamp < end)
@@ -101,8 +118,9 @@ async def _record_coverage(
             symbol, earnings_date, phase, market_date, session,
             expected_start, expected_end, observed_first, observed_last,
             observed_minutes, expected_minutes, source, gateway_received_at,
-            response_sha256, data_quality_flags, calendar, calendar_version
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+            response_sha256, data_quality_flags, calendar, calendar_version,
+            collection_mode
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
         ON CONFLICT (symbol, earnings_date, phase) DO UPDATE SET
             market_date=EXCLUDED.market_date, session=EXCLUDED.session,
             expected_start=EXCLUDED.expected_start, expected_end=EXCLUDED.expected_end,
@@ -113,7 +131,9 @@ async def _record_coverage(
             response_sha256=EXCLUDED.response_sha256,
             data_quality_flags=EXCLUDED.data_quality_flags,
             calendar=EXCLUDED.calendar, calendar_version=EXCLUDED.calendar_version,
-            retrieved_at=now()
+            retrieved_at=now(), collection_mode=EXCLUDED.collection_mode
+        WHERE EXCLUDED.collection_mode = 'scheduled_capture'
+          AND earnings_ohlcv_coverage.collection_mode = 'scheduled_capture'
         """,
         response.session_history.symbol,
         earnings_date,
@@ -132,26 +152,63 @@ async def _record_coverage(
         flags,
         CALENDAR_NAME,
         CALENDAR_VERSION,
+        collection_mode,
     )
 
 
 async def capture_phase(
-    gateway: BoundedGatewayClient, conn, phase_name: str, market_date: dt.date
+    gateway: BoundedGatewayClient,
+    conn,
+    phase_name: str,
+    market_date: dt.date,
+    *,
+    symbol: str | None = None,
+    collection_mode: str = "scheduled_capture",
 ) -> int:
     phase = PHASES[phase_name]
     earnings_date, evidence_date = phase_dates(phase, market_date)
     symbols = await _symbols(conn, earnings_date)
+    if symbol is not None:
+        if symbol not in symbols:
+            raise ValueError(
+                f"{symbol} is not an after-close earnings symbol for {earnings_date}"
+            )
+        existing = await conn.fetchval(
+            """
+            SELECT EXISTS (
+                SELECT 1 FROM earnings_ohlcv_coverage
+                WHERE symbol=$1 AND earnings_date=$2 AND phase=$3
+            )
+            """,
+            symbol,
+            earnings_date,
+            phase_name,
+        )
+        if existing:
+            raise ValueError(
+                f"coverage already exists for {symbol} {earnings_date} {phase_name}"
+            )
+        symbols = [symbol]
     responses = await asyncio.gather(
         *(gateway.get_session_history(s, evidence_date, session=phase.session) for s in symbols)
     )
     for response in responses:
-        await preserve_session_history(conn, response)
+        history = response.session_history
+        identity_mismatch = (
+            history.symbol not in symbols
+            or history.date != evidence_date
+            or history.session != phase.session
+        )
+        if identity_mismatch:
+            raise ValueError("gateway session-history identity does not match the request")
+        await preserve_session_history(conn, response, collection_mode=collection_mode)
         await _record_coverage(
             conn,
             response,
             phase_name=phase_name,
             earnings_date=earnings_date,
             market_date=evidence_date,
+            collection_mode=collection_mode,
         )
     return len(responses)
 
@@ -170,8 +227,20 @@ async def _main(argv: list[str]) -> int:
                         print("OHLCV capture already running; skipped")
                         return 0
                     for phase_name in args.phase:
-                        count = await capture_phase(gateway, conn, phase_name, args.market_date)
-                        print(f"{phase_name}: preserved {count} symbol(s)")
+                        count = await capture_phase(
+                            gateway,
+                            conn,
+                            phase_name,
+                            args.market_date,
+                            symbol=args.symbol,
+                            collection_mode=(
+                                "historical_backfill"
+                                if args.historical_backfill
+                                else "scheduled_capture"
+                            ),
+                        )
+                        mode = "historical backfill" if args.historical_backfill else "scheduled"
+                        print(f"{phase_name}: preserved {count} symbol(s) ({mode})")
     finally:
         await pool.close()
     return 0

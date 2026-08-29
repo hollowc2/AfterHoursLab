@@ -10,6 +10,13 @@ from schwab_gateway_sdk.models import (
     SessionHistoryResponseV1,
 )
 
+BAR_COLLECTION_MODES = {
+    "legacy_unspecified",
+    "manual_collection",
+    "scheduled_capture",
+    "historical_backfill",
+}
+
 
 async def preserve_quotes(
     conn,
@@ -68,7 +75,12 @@ async def preserve_quotes(
     )
 
 
-async def preserve_minute_history(conn, response: HistoryResponseV1) -> None:
+async def preserve_minute_history(
+    conn,
+    response: HistoryResponseV1,
+    *,
+    collection_mode: str = "manual_collection",
+) -> None:
     history = response.history
     if history.frequency != "minute":
         raise ValueError("only minute gateway history can be preserved as bar evidence")
@@ -86,10 +98,16 @@ async def preserve_minute_history(conn, response: HistoryResponseV1) -> None:
         age_seconds=history.age_seconds,
         data_quality_flags=history.data_quality_flags,
         schema_version=response.schema_version,
+        collection_mode=collection_mode,
     )
 
 
-async def preserve_session_history(conn, response: SessionHistoryResponseV1) -> None:
+async def preserve_session_history(
+    conn,
+    response: SessionHistoryResponseV1,
+    *,
+    collection_mode: str = "manual_collection",
+) -> None:
     history = response.session_history
     await _preserve_bars(
         conn,
@@ -106,6 +124,7 @@ async def preserve_session_history(conn, response: SessionHistoryResponseV1) -> 
         data_quality_flags=history.data_quality_flags,
         schema_version=response.schema_version,
         evidence_date=history.date,
+        collection_mode=collection_mode,
     )
 
 
@@ -124,8 +143,11 @@ async def _preserve_bars(
     age_seconds: float | None,
     data_quality_flags: tuple[str, ...],
     schema_version: str,
+    collection_mode: str,
     evidence_date: dt.date | None = None,
 ) -> None:
+    if collection_mode not in BAR_COLLECTION_MODES:
+        raise ValueError(f"unsupported bar collection mode: {collection_mode}")
     rows = [
         (
             symbol,
@@ -146,6 +168,7 @@ async def _preserve_bars(
             age_seconds,
             list(data_quality_flags),
             schema_version,
+            collection_mode,
             None,
             None,
             None,
@@ -161,11 +184,12 @@ async def _preserve_bars(
             symbol, ts, session, evidence_date, open, high, low, close, volume,
             gateway_event_timestamp, gateway_received_at, source, gateway_endpoint,
             frequency, stale, age_seconds, data_quality_flags, schema_version,
-            exto_eligible, exchange_status, trading_status, session_eligible
+            collection_mode, exto_eligible, exchange_status, trading_status,
+            session_eligible
         )
         VALUES (
             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-            $14, $15, $16, $17, $18, $19, $20, $21, $22
+            $14, $15, $16, $17, $18, $19, $20, $21, $22, $23
         )
         ON CONFLICT (
             symbol, ts, session, gateway_endpoint, gateway_received_at
