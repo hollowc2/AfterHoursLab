@@ -15,7 +15,7 @@ import dataclasses
 import datetime as dt
 import hashlib
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -75,6 +75,57 @@ CSV_MAX_ROWS = 5000
 CHART_MAX_ROWS = 2000
 SSE_POLL_SECONDS = 2.0
 SSE_KEEPALIVE_SECONDS = 15.0
+
+
+async def _today_event_stream(
+    request: Request,
+    market_date: dt.date,
+    *,
+    historical: bool,
+    load_snapshot: Callable[[Request, dt.date], Awaitable[dict[str, Any]]],
+    snapshot_digest: Callable[[dict[str, Any]], str],
+    snapshot_event: Callable[[dict[str, Any], str], str],
+    poll_seconds: float = SSE_POLL_SECONDS,
+    keepalive_seconds: float = SSE_KEEPALIVE_SECONDS,
+    sleeper: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    clock: Callable[[], float] | None = None,
+) -> AsyncIterator[str]:
+    """Yield deduplicated SSE frames without holding resources while sleeping."""
+    now = clock or (lambda: asyncio.get_running_loop().time())
+    previous_digest: str | None = None
+    last_frame_at = now()
+    while not await request.is_disconnected():
+        try:
+            snapshot = await load_snapshot(request, market_date)
+            digest = snapshot_digest(snapshot)
+            if digest != previous_digest:
+                yield snapshot_event(snapshot, digest)
+                previous_digest = digest
+                last_frame_at = now()
+            if historical:
+                return
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            payload = json.dumps(
+                {
+                    "state": "unavailable",
+                    "message": (
+                        "Database state is temporarily unavailable; "
+                        "no market data was substituted."
+                    ),
+                },
+                separators=(",", ":"),
+            )
+            yield f"event: degraded\ndata: {payload}\n\n"
+            last_frame_at = now()
+            if historical:
+                return
+
+        await sleeper(poll_seconds)
+        if now() - last_frame_at >= keepalive_seconds:
+            yield ": keepalive\n\n"
+            last_frame_at = now()
 
 
 def _fmt_pct(value: float | None, digits: int = 2) -> str:
@@ -253,44 +304,15 @@ def create_app(pool: DatabasePool | None = None) -> FastAPI:
         market_date = parse_market_date(date)
         historical = market_date != dt.datetime.now(EASTERN).date()
 
-        async def events() -> AsyncIterator[str]:
-            previous_digest: str | None = None
-            last_frame_at = asyncio.get_running_loop().time()
-            while not await request.is_disconnected():
-                try:
-                    snapshot = await load_today(request, market_date)
-                    digest = snapshot_digest(snapshot)
-                    if digest != previous_digest:
-                        yield snapshot_event(snapshot, digest)
-                        previous_digest = digest
-                        last_frame_at = asyncio.get_running_loop().time()
-                    if historical:
-                        return
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    payload = json.dumps(
-                        {
-                            "state": "unavailable",
-                            "message": (
-                                "Database state is temporarily unavailable; "
-                                "no market data was substituted."
-                            ),
-                        },
-                        separators=(",", ":"),
-                    )
-                    yield f"event: degraded\ndata: {payload}\n\n"
-                    last_frame_at = asyncio.get_running_loop().time()
-                    if historical:
-                        return
-
-                await asyncio.sleep(SSE_POLL_SECONDS)
-                if asyncio.get_running_loop().time() - last_frame_at >= SSE_KEEPALIVE_SECONDS:
-                    yield ": keepalive\n\n"
-                    last_frame_at = asyncio.get_running_loop().time()
-
         return StreamingResponse(
-            events(),
+            _today_event_stream(
+                request,
+                market_date,
+                historical=historical,
+                load_snapshot=load_today,
+                snapshot_digest=snapshot_digest,
+                snapshot_event=snapshot_event,
+            ),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache, no-transform",

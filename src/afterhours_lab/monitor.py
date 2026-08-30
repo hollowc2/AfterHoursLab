@@ -56,6 +56,10 @@ class MonitorConfig:
     def __post_init__(self) -> None:
         if self.interval_seconds <= 0:
             raise ValueError("interval must be greater than zero")
+        if self.max_idle_sleep_seconds <= 0:
+            raise ValueError("maximum idle sleep must be greater than zero")
+        if self.max_failure_backoff_seconds <= 0:
+            raise ValueError("maximum failure backoff must be greater than zero")
         if self.window_start >= self.window_end:
             raise ValueError("window start must be earlier than window end")
 
@@ -154,29 +158,42 @@ def seconds_to_next_boundary(now: dt.datetime, config: MonitorConfig) -> float:
     return max(0.0, min(config.max_idle_sleep_seconds, (boundary - eastern).total_seconds()))
 
 
-_INSERT_QUOTE_SQL = """
+_INSERT_QUOTE_PREFIX = """
     INSERT INTO quote_evidence (
         symbol, event_timestamp, gateway_received_at, session, capture_window,
         earnings_date, bid, ask, bid_size, ask_size, last, last_size, mark,
         volume, close, net_percent_change, source, stale, age_seconds,
         data_quality_flags, schema_version, exto_eligible, exchange_status,
         trading_status, session_eligible
-    ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-        $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25
-    )
-    ON CONFLICT (symbol, gateway_received_at, capture_window, earnings_date)
-    DO NOTHING
+    ) VALUES
 """
 
 
 async def insert_quote_rows(conn, rows: Sequence[QuoteEvidenceRow]) -> tuple[int, int]:
-    """Insert a response atomically and return (inserted, conflicted)."""
-    inserted = 0
+    """Insert an entire gateway response in one statement and one transaction."""
+    if not rows:
+        return 0, 0
+    width = len(rows[0].sql_args())
+    values_sql: list[str] = []
+    args: list[Any] = []
+    for row_index, row in enumerate(rows):
+        row_args = row.sql_args()
+        if len(row_args) != width:
+            raise ValueError("quote evidence rows have inconsistent widths")
+        start = row_index * width + 1
+        values_sql.append(
+            "(" + ", ".join(f"${index}" for index in range(start, start + width)) + ")"
+        )
+        args.extend(row_args)
+    sql = (
+        "WITH inserted AS ("
+        + _INSERT_QUOTE_PREFIX
+        + ", ".join(values_sql)
+        + " ON CONFLICT (symbol, gateway_received_at, capture_window, earnings_date) "
+        + "DO NOTHING RETURNING 1) SELECT count(*)::int FROM inserted"
+    )
     async with conn.transaction():
-        for row in rows:
-            result = await conn.execute(_INSERT_QUOTE_SQL, *row.sql_args())
-            inserted += int(result.rsplit(" ", 1)[-1])
+        inserted = await conn.fetchval(sql, *args)
     return inserted, len(rows) - inserted
 
 
@@ -227,20 +244,22 @@ async def run_cycle(
     market_date: dt.date,
     *,
     now: Callable[[], dt.datetime],
+    report_no_candidates: bool = True,
 ) -> CycleResult:
     started_at = now()
     symbols = await fetch_monitor_candidates(conn, market_date)
     if not symbols:
-        completed_at = now()
-        await record_cycle(
-            conn,
-            market_date=market_date,
-            started_at=started_at,
-            completed_at=completed_at,
-            active=True,
-            status="no_candidates",
-        )
-        log.info("monitor_no_candidates", market_date=str(market_date))
+        if report_no_candidates:
+            completed_at = now()
+            await record_cycle(
+                conn,
+                market_date=market_date,
+                started_at=started_at,
+                completed_at=completed_at,
+                active=True,
+                status="no_candidates",
+            )
+            log.info("monitor_no_candidates", market_date=str(market_date))
         return CycleResult(market_date, 0, 0, 0, 0)
 
     response: QuoteResponseV1 = await gateway.get_quotes(symbols)
@@ -299,6 +318,7 @@ async def run_daemon(
 
     failures = 0
     inactive_recorded_for: dt.date | None = None
+    no_candidates_recorded_for: dt.date | None = None
     while not stop.is_set():
         current = now().astimezone(EASTERN)
         market_date = forced_date or current.date()
@@ -319,7 +339,13 @@ async def run_daemon(
 
         inactive_recorded_for = None
         try:
-            await run_cycle(conn, gateway, market_date, now=now)
+            result = await run_cycle(
+                conn,
+                gateway,
+                market_date,
+                now=now,
+                report_no_candidates=no_candidates_recorded_for != market_date,
+            )
             failures = 0
         except GatewayClientError as exc:
             completed = now()
@@ -349,6 +375,11 @@ async def run_daemon(
 
         if once:
             return 0
+        if result.candidate_count == 0:
+            no_candidates_recorded_for = market_date
+            await sleep_or_stop(config.max_idle_sleep_seconds)
+            continue
+        no_candidates_recorded_for = None
         await sleep_or_stop(config.interval_seconds)
     return 0
 

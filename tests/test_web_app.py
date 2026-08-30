@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 
 import pytest
@@ -15,7 +16,8 @@ from conftest import (
 )
 from fastapi.testclient import TestClient
 
-from afterhours_lab.web.app import create_app
+from afterhours_lab import gateway as gateway_module
+from afterhours_lab.web.app import _today_event_stream, create_app
 
 DATE = EARNINGS_DATE.isoformat()
 
@@ -95,6 +97,8 @@ def test_historical_today_page_uses_one_shot_sse_and_disables_reconnect(
     assert "Historical snapshot — live updates disabled" in page.text
     assert "/static/today.js" not in page.text
     assert stream.headers["content-type"].startswith("text/event-stream")
+    assert stream.headers["cache-control"] == "no-cache, no-transform"
+    assert stream.headers["x-accel-buffering"] == "no"
     assert "event: snapshot" in stream.text
     assert "id: " in stream.text
     assert "TEST" in stream.text
@@ -104,6 +108,146 @@ def test_today_stream_rejects_a_malformed_date(full_conn: FakeConnection) -> Non
     with client_for(full_conn) as client:
         response = client.get("/today/stream?date=nope")
     assert response.status_code == 400
+
+
+class DisconnectSequence:
+    def __init__(self, *states: bool) -> None:
+        self.states = iter(states)
+
+    async def is_disconnected(self) -> bool:
+        return next(self.states, True)
+
+
+async def collect_stream(request, loader, **overrides):
+    return [
+        frame
+        async for frame in _today_event_stream(
+            request,
+            EARNINGS_DATE,
+            historical=False,
+            load_snapshot=loader,
+            snapshot_digest=lambda snapshot: str(snapshot["version"]),
+            snapshot_event=lambda snapshot, digest: (
+                f"id: {digest}\nevent: snapshot\ndata: {snapshot['version']}\n\n"
+            ),
+            **overrides,
+        )
+    ]
+
+
+async def test_today_stream_deduplicates_unchanged_snapshots() -> None:
+    versions = iter((1, 1, 2))
+
+    async def loader(_request, _date):
+        return {"version": next(versions)}
+
+    async def sleeper(_delay):
+        return None
+
+    frames = await collect_stream(
+        DisconnectSequence(False, False, False, True),
+        loader,
+        sleeper=sleeper,
+        keepalive_seconds=999,
+    )
+
+    assert [frame.splitlines()[0] for frame in frames] == ["id: 1", "id: 2"]
+
+
+async def test_today_stream_emits_keepalive_without_duplicate_data() -> None:
+    elapsed = 0.0
+
+    async def loader(_request, _date):
+        return {"version": 1}
+
+    async def sleeper(delay):
+        nonlocal elapsed
+        elapsed += delay
+
+    frames = await collect_stream(
+        DisconnectSequence(False, False, False, True),
+        loader,
+        poll_seconds=5,
+        keepalive_seconds=10,
+        sleeper=sleeper,
+        clock=lambda: elapsed,
+    )
+
+    assert sum("event: snapshot" in frame for frame in frames) == 1
+    assert frames.count(": keepalive\n\n") == 1
+
+
+async def test_today_stream_discloses_database_failure_without_empty_market_data() -> None:
+    async def loader(_request, _date):
+        raise RuntimeError("database unavailable")
+
+    frames = [
+        frame
+        async for frame in _today_event_stream(
+            DisconnectSequence(False),
+            EARNINGS_DATE,
+            historical=True,
+            load_snapshot=loader,
+            snapshot_digest=lambda _snapshot: "unused",
+            snapshot_event=lambda _snapshot, _digest: "unused",
+        )
+    ]
+
+    assert len(frames) == 1
+    assert "event: degraded" in frames[0]
+    assert "no market data was substituted" in frames[0]
+    assert "database unavailable" not in frames[0]
+
+
+async def test_today_stream_honors_disconnect_before_acquiring_data() -> None:
+    calls = []
+
+    async def loader(_request, _date):
+        calls.append("load")
+        return {"version": 1}
+
+    frames = await collect_stream(DisconnectSequence(True), loader)
+
+    assert frames == []
+    assert calls == []
+
+
+async def test_today_stream_generator_closes_without_leaking_more_work() -> None:
+    calls = []
+
+    async def loader(_request, _date):
+        calls.append("load")
+        return {"version": len(calls)}
+
+    async def sleeper(_delay):
+        calls.append("sleep")
+
+    stream = _today_event_stream(
+        DisconnectSequence(False, False),
+        EARNINGS_DATE,
+        historical=False,
+        load_snapshot=loader,
+        snapshot_digest=lambda snapshot: str(snapshot["version"]),
+        snapshot_event=lambda _snapshot, digest: f"id: {digest}\n\n",
+        sleeper=sleeper,
+    )
+    assert await anext(stream) == "id: 1\n\n"
+    await stream.aclose()
+    await asyncio.sleep(0)
+
+    assert calls == ["load"]
+
+
+def test_web_routes_never_construct_a_gateway_client(
+    full_conn: FakeConnection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("web route constructed a gateway client")
+
+    monkeypatch.setattr(gateway_module, "build_gateway_client", forbidden)
+    with client_for(full_conn) as client:
+        assert client.get(f"/today?date={DATE}").status_code == 200
+        assert client.get(f"/today/stream?date={DATE}").status_code == 200
 
 
 def test_explorer_discloses_included_and_excluded_counts(full_conn: FakeConnection) -> None:
