@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}AfterHoursLab research{% endblock %}</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header class="top">
+  <span class="brand">AfterHoursLab</span>
+  <nav>
+    <a href="/today" class="{{ 'active' if page == 'today' }}">Today</a>
+    <a href="/events" class="{{ 'active' if page == 'explorer' }}">Explorer</a>
+    <a href="/quality" class="{{ 'active' if page == 'quality' }}">Data quality</a>
+  </nav>
+  <span class="spacer"></span>
+  <span class="stamp">
+    detection {{ THRESHOLD_PCT }}% from pre-close &middot; study window {{ STUDY_WINDOW_MINUTES }}m
+  </span>
+</header>
+
+<main>
+  {% block content %}{% endblock %}
+</main>
+
+<footer>
+  Every value on this page is read from the shared research-data layer
+  (<code>afterhours_lab.research</code>); no calculation is reimplemented in the browser.
+</footer>
+
+<script src="/static/plotly-finance.min.js"></script>
+<script src="/static/htmx.min.js"></script>
+<script src="/static/charts.js"></script>
+</body>
+</html>

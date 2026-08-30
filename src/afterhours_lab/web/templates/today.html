@@ -1,0 +1,140 @@
+{% extends "base.html" %}
+{% set page = 'today' %}
+{% block title %}Today — AfterHoursLab{% endblock %}
+{% block content %}
+
+<h1>Today &mdash; {{ market_date.isoformat() }}</h1>
+<p class="lede">
+  After-close reporters for this session. Every live value here is
+  <strong>provisional</strong>: computed from whatever minutes have been recorded so
+  far, not from an audited coverage row. Only a row marked <span class="tag final">finalized</span>
+  is safe to compare against historical research.
+</p>
+
+<div class="panel">
+  <div class="grid three">
+    <div>
+      <h2>Data freshness</h2>
+      <dl class="kv">
+        <dt>Last quote evidence</dt><dd>{{ operations.last_quote_received_at | age }}</dd>
+        <dt>Last bar evidence</dt><dd>{{ operations.last_bar_received_at | age }}</dd>
+        <dt>Last coverage row</dt><dd>{{ operations.last_coverage_retrieved_at | age }}</dd>
+        <dt>Last earnings archive</dt><dd>{{ operations.last_earnings_event_created_at | age }}</dd>
+        <dt>Last feature computed</dt><dd>{{ operations.last_feature_computed_at | age }}</dd>
+      </dl>
+    </div>
+    <div>
+      <h2>Coverage</h2>
+      <dl class="kv">
+        <dt>Candidates today</dt><dd>{{ candidates | length }}</dd>
+        <dt>With a pre-close reference</dt>
+        <dd>{{ candidates | selectattr('pre_close_reference') | list | length }}</dd>
+        <dt>With live quote evidence</dt>
+        <dd>{{ candidates | selectattr('quote_received_at') | list | length }}</dd>
+        <dt>Finalized</dt>
+        <dd>{{ candidates | selectattr('finalized') | list | length }}</dd>
+      </dl>
+    </div>
+    <div>
+      <h2>Navigate</h2>
+      <dl class="kv">
+        <dt>Session</dt>
+        <dd>
+          <a href="/today?date={{ previous_date.isoformat() }}">&larr; prev</a>
+          &middot;
+          <a href="/today?date={{ next_date.isoformat() }}">next &rarr;</a>
+        </dd>
+        <dt>Rendered</dt><dd>{{ generated_at | et(true) }}</dd>
+      </dl>
+    </div>
+  </div>
+</div>
+
+{% if not candidates %}
+  <div class="disclosure">
+    No after-close earnings events are archived for {{ market_date.isoformat() }}.
+    Either none report today, or <code>afterhours-lab-archive-earnings</code> has not run
+    for this date.
+  </div>
+{% else %}
+<div class="panel scroll">
+  <table>
+    <thead>
+      <tr>
+        <th>Symbol</th>
+        <th class="num">Pre-close</th>
+        <th class="num">Bid</th>
+        <th class="num">Ask</th>
+        <th class="num">Mark</th>
+        <th class="num">Spread</th>
+        <th class="num">Spread %</th>
+        <th class="num">Quote vol</th>
+        <th class="num">Provisional move</th>
+        <th>First {{ THRESHOLD_PCT }}% cross</th>
+        <th class="num">PM minutes</th>
+        <th class="num">EPS surprise</th>
+        <th>State</th>
+        <th>Health</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in candidates %}
+      <tr>
+        <td>
+          <a href="/events/{{ row.symbol }}/{{ row.earnings_date.isoformat() }}">{{ row.symbol }}</a>
+        </td>
+        <td class="num">{{ row.pre_close_reference | num }}</td>
+        <td class="num">{{ row.bid | num }}</td>
+        <td class="num">{{ row.ask | num }}</td>
+        <td class="num">{{ row.mark | num }}</td>
+        <td class="num">{{ row.spread | num }}</td>
+        <td class="num">{{ row.spread_pct | num }}</td>
+        <td class="num">{{ row.quote_volume | int_ }}</td>
+        <td class="num {{ 'pos' if (row.provisional_move_pct or 0) > 0 else 'neg' if (row.provisional_move_pct or 0) < 0 }}">
+          {{ row.provisional_move_pct | pct }}
+        </td>
+        <td>
+          {% if row.first_threshold_cross_ts %}
+            {{ row.first_threshold_cross_ts | et }}
+            <span class="muted">({{ row.first_threshold_cross_pct | pct }})</span>
+          {% else %}<span class="muted">—</span>{% endif %}
+        </td>
+        <td class="num">{{ row.provisional_bar_minutes }}</td>
+        <td class="num">{{ row.eps_surprise_pct | pct }}</td>
+        <td>
+          {% if row.finalized %}
+            <span class="tag final">finalized</span>
+            <span class="tag {{ row.finalized_class }}">{{ row.finalized_class }}</span>
+          {% else %}
+            <span class="tag provisional">provisional</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if row.degradation_reasons %}
+            <span class="tag bad" title="{{ row.degradation_reasons | join('; ') }}">
+              {{ row.degradation_reasons | length }} issue(s)
+            </span>
+          {% else %}<span class="tag final">ok</span>{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<h2>Degradation detail</h2>
+<div class="panel">
+  <dl class="kv">
+    {% for row in candidates %}
+      <dt>{{ row.symbol }}</dt>
+      <dd>
+        {% if row.degradation_reasons %}
+          {{ row.degradation_reasons | join('; ') }}
+        {% else %}<span class="muted">no degradation reported</span>{% endif %}
+      </dd>
+    {% endfor %}
+  </dl>
+</div>
+{% endif %}
+
+{% endblock %}

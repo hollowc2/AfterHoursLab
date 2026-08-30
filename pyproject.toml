@@ -6,12 +6,16 @@ requires-python = ">=3.12"
 dependencies = [
     "asyncpg>=0.30.0",
     "exchange-calendars>=4.13.2,<5",
+    "fastapi>=0.141.1",
     "httpx>=0.27.0",
+    "jinja2>=3.1.6",
     "pydantic>=2.9.0",
     "pydantic-settings>=2.6.0",
+    "python-multipart>=0.0.9",
     "rich>=13.7.0",
     "schwab-gateway-sdk",
     "structlog>=24.0.0",
+    "uvicorn[standard]>=0.52.4",
 ]
 
 [tool.uv.sources]
@@ -28,6 +32,17 @@ afterhours-lab-capture-ohlcv = "afterhours_lab.capture_ohlcv:main"
 afterhours-lab-audit-ohlcv = "afterhours_lab.audit_ohlcv:main"
 afterhours-lab-moves = "afterhours_lab.moves:main"
 afterhours-lab-reactions = "afterhours_lab.reactions:main"
+afterhours-lab-persist-reactions = "afterhours_lab.persist_reactions:main"
+afterhours-lab-web = "afterhours_lab.web.app:main"
+
+[project.optional-dependencies]
+# DataFrame and Parquet exports are optional: the CLI, capture jobs, and the web
+# server never import them, so they stay out of the default install.
+research = [
+    "pandas>=2.2.0",
+    "polars>=1.0.0",
+    "pyarrow>=17.0.0",
+]
 
 [build-system]
 requires = ["hatchling"]

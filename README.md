@@ -172,6 +172,9 @@ and `candles` (a TimescaleDB hypertable of 1m OHLCV bars, tagged with which capt
 window — `day_before` / `after_hours` / `day_after` — and which earnings event they
 belong to). `quote_evidence` and `bar_evidence` preserve the lossless versioned gateway
 contracts and provenance alongside those derived analysis candles.
+`earnings_reaction_features` holds versioned, insert-only study features (see
+"Persisting features"), and `research_notes` holds append-only researcher commentary,
+deliberately kept in its own table so a note can never enter a computed feature.
 
 Set `DATABASE__HOST`/`PORT`/`NAME`/`USER`/`PASSWORD` in `.env`, then:
 
@@ -315,11 +318,35 @@ output additionally retains collection modes, response hashes, stale state, and 
 coverage. Early-close sessions are explicitly excluded from this first fixed-clock
 study.
 
-`earnings_reaction_features` is the versioned storage contract for a later persistence
-step. The current command is intentionally report-only: it neither inserts derived
-rows nor overwrites prior research. Before stored features are enabled, the serializer
-will map calculation status, missing fields, parameters, cutoffs, and the canonical
-input digest into that table and enforce insert-only application behavior.
+`afterhours-lab-reactions` stays report-only: it neither inserts derived rows nor
+overwrites prior research. Persisting the same numbers is a separate, explicit step.
+
+### Persisting features
+
+`afterhours-lab-persist-reactions` maps a computed result onto
+`earnings_reaction_features` — calculation status, missing fields, parameters, window
+cutoffs, per-phase response hashes and collection modes, and a canonical input digest.
+
+```bash
+# see what would be written, without writing it
+uv run afterhours-lab-persist-reactions --from 2026-08-01 --to 2026-08-31 --dry-run
+
+# insert; rows already present for this version triple are left untouched
+uv run afterhours-lab-persist-reactions --from 2026-08-01 --to 2026-08-31
+```
+
+Two properties make a stored row trustworthy:
+
+* **Insert-only.** Every write is `ON CONFLICT DO NOTHING` on
+  `(symbol, earnings_date, feature_version, detector_version, classifier_version)`, so
+  a rerun can never silently change a value another study already cited. Changing a
+  definition means bumping a version and inserting alongside the old generation.
+* **Self-describing.** `source_evidence_sha256` digests the exact bars *and* the
+  coverage identities the row was computed from, so a later rerun can prove the inputs
+  were the same evidence rather than merely the same symbol and date.
+
+The run takes its own Postgres advisory lock, so an overlapping invocation skips
+rather than queueing behind a possibly wedged process.
 
 Suggested daily research loop:
 
@@ -333,6 +360,100 @@ Suggested daily research loop:
    never leaks into the same-day detector or classifier.
 5. Review aggregates weekly by class, direction, collection mode, liquidity, and
    month before promoting any hypothesis to a formal out-of-sample backtest.
+
+## Shared research-data layer
+
+```
+Database
+   |
+Typed research datasets  (afterhours_lab.research)
+   |-- CLI
+   |-- Jupyter
+   `-- Website / API
+```
+
+`afterhours_lab.research` is the single place that reads the research tables. Nothing
+outside it writes SQL against them, and nothing outside `afterhours_lab.reactions`
+computes a feature, so a change to a join or a surprise definition lands once.
+
+```python
+import datetime as dt
+from afterhours_lab.db.config import DatabaseSettings
+from afterhours_lab.db.connection import DatabasePool
+from afterhours_lab.research import EventFilter, fetch_cohort, fetch_event_detail, to_csv
+
+cohort_filter = EventFilter(
+    date_from=dt.date(2026, 1, 1),
+    date_to=dt.date(2026, 8, 31),
+    reaction_classes=("spike_and_fade",),
+    min_abs_initial_return=3.0,
+    min_coverage_ratio=0.95,
+    order_by="retention_asc",
+)
+
+pool = await DatabasePool.connect(DatabaseSettings())
+async with pool.acquire() as conn:
+    cohort = await fetch_cohort(conn, cohort_filter)
+    detail = await fetch_event_detail(conn, "NVDA", dt.date(2026, 8, 20))
+
+print(cohort.included_count, "included;", cohort.excluded_count, "excluded")
+print(to_csv(cohort.rows))
+```
+
+What it provides:
+
+* **Event summaries** — `fetch_cohort`, `fetch_event_summary`. Earnings events joined
+  to their persisted features, EPS/revenue surprise, retention, coverage phases, and
+  note counts.
+* **Event OHLCV paths** — `fetch_event_bars` reads bars from exactly the retrieval
+  each coverage row names, so a chart and a stored number cannot disagree.
+* **Data-quality information** — `fetch_quality_issues`, `fetch_operations_snapshot`.
+* **Cohort filters** — `EventFilter` validates itself on construction and only emits
+  parameterized SQL; sort keys come from a whitelist, never from caller-supplied text.
+* **Stable exports** — `to_records`, `to_csv`, `to_jsonl`, and (with the optional
+  `research` extra: `uv sync --extra research`) `to_pandas`, `to_polars`,
+  `write_parquet`. Every format uses the same record shape.
+
+Cohort reads always return `universe_count` and `included_count`, so an interface can
+disclose how many events a filter excluded rather than quietly showing a subset.
+
+Features are keyed by a version triple. `EventFilter.versions` defaults to what the
+installed code computes, so a cohort never mixes generations produced by different
+definitions.
+
+## Research website
+
+A read-only FastAPI + HTMX site over that layer, with server-built Plotly figures. It
+displays and orchestrates research; it does not reimplement any calculation in
+JavaScript. Plotly and htmx are vendored under `web/static/`, so the site loads no
+external assets.
+
+```bash
+uv run afterhours-lab-web            # http://127.0.0.1:8055, loopback only
+uv run afterhours-lab-web --reload --port 8080
+```
+
+| Page | What it answers |
+| --- | --- |
+| `/today` | The 12:30-2:45 PM cockpit: today's after-close reporters, pre-close reference, bid/ask/mark/spread, provisional move, first provisional threshold cross, freshness, and degradation reasons. |
+| `/events` | Cross-sectional explorer: date/symbol/class/direction/move/retention/delay/liquidity/coverage/surprise filters, five cohort charts, CSV export. |
+| `/events/{symbol}/{date}` | The event page: synchronized candlestick chart with the pre-close reference, ±2% bands, signal marker, PM+1/5/15/30/60/105 checkpoints, VWAP proxy, MFE/MAE, volume, and the following session; plus versions, surprise, collection mode, response hashes, notes, and a notebook snippet. |
+| `/quality` | Operations only: missing capture phases, stale or unanalyzed events, backfill vs scheduled capture, and each writer's last successful write. |
+
+Two distinctions the interface never blurs:
+
+* **Provisional vs finalized.** Everything on `/today` is computed from whatever
+  minutes happen to have been recorded so far. A row is `finalized` only once a
+  persisted feature row exists.
+* **Operations vs research.** Coverage gaps live on `/quality`, not in the reaction
+  statistics, so a missing capture phase is never read as a market observation.
+
+The only write path is the researcher note (`research_notes`, migration 008): append-only
+discretionary commentary, stored in its own table so it can never contaminate a
+computed feature. A correction is a new note, not an edit.
+
+The site is a client of the same layer as the CLI and notebooks, and it does not own
+any polling loop — capture keeps running whether or not the web server is up.
 
 ## Deploying on helios
 

@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block title %}Event explorer — AfterHoursLab{% endblock %}
+{% block content %}
+
+<h1>Event explorer</h1>
+<p class="lede">
+  Cross-sectional search over persisted reaction features
+  (<code>{{ filter.versions.feature_version }}</code> /
+  <code>{{ filter.versions.detector_version }}</code> /
+  <code>{{ filter.versions.classifier_version }}</code>).
+  Counts of included and excluded events are always disclosed with the results.
+</p>
+
+<div class="panel">
+  <form class="filters" method="get" action="/events">
+    <div><label for="from">From</label>
+      <input type="date" id="from" name="from" value="{{ filter.date_from.isoformat() if filter.date_from }}"></div>
+    <div><label for="to">To</label>
+      <input type="date" id="to" name="to" value="{{ filter.date_to.isoformat() if filter.date_to }}"></div>
+    <div><label for="symbol">Symbols (comma separated)</label>
+      <input type="text" id="symbol" name="symbol" value="{{ filter.symbols | join(',') }}" placeholder="AAPL,MSFT"></div>
+
+    <div><label for="status">Analysis status</label>
+      <select id="status" name="status" multiple>
+        {% for value in ANALYSIS_STATUSES %}
+          <option value="{{ value }}" {{ 'selected' if value in filter.analysis_statuses }}>{{ value }}</option>
+        {% endfor %}
+      </select></div>
+    <div><label for="class">Reaction class</label>
+      <select id="class" name="class" multiple>
+        {% for value in REACTION_CLASSES %}
+          <option value="{{ value }}" {{ 'selected' if value in filter.reaction_classes }}>{{ value }}</option>
+        {% endfor %}
+      </select></div>
+    <div><label for="direction">Direction</label>
+      <select id="direction" name="direction" multiple>
+        {% for value in REACTION_DIRECTIONS %}
+          <option value="{{ value }}" {{ 'selected' if value in filter.directions }}>{{ value }}</option>
+        {% endfor %}
+      </select></div>
+    <div><label for="mode">Capture mode</label>
+      <select id="mode" name="mode" multiple>
+        {% for value in COLLECTION_MODES %}
+          <option value="{{ value }}" {{ 'selected' if value in filter.postmarket_collection_modes }}>{{ value }}</option>
+        {% endfor %}
+      </select></div>
+
+    <div><label for="min_move">Min |initial move| %</label>
+      <input type="number" step="0.1" id="min_move" name="min_move" value="{{ filter.min_abs_initial_return if filter.min_abs_initial_return is not none }}"></div>
+    <div><label for="max_move">Max |initial move| %</label>
+      <input type="number" step="0.1" id="max_move" name="max_move" value="{{ filter.max_abs_initial_return if filter.max_abs_initial_return is not none }}"></div>
+    <div><label for="min_retention">Min retention</label>
+      <input type="number" step="0.05" id="min_retention" name="min_retention" value="{{ filter.min_retention if filter.min_retention is not none }}"></div>
+    <div><label for="max_retention">Max retention</label>
+      <input type="number" step="0.05" id="max_retention" name="max_retention" value="{{ filter.max_retention if filter.max_retention is not none }}"></div>
+    <div><label for="min_delay">Min delay (min)</label>
+      <input type="number" id="min_delay" name="min_delay" value="{{ filter.min_detection_delay_minutes if filter.min_detection_delay_minutes is not none }}"></div>
+    <div><label for="max_delay">Max delay (min)</label>
+      <input type="number" id="max_delay" name="max_delay" value="{{ filter.max_detection_delay_minutes if filter.max_detection_delay_minutes is not none }}"></div>
+    <div><label for="min_volume">Min 105m volume</label>
+      <input type="number" id="min_volume" name="min_volume" value="{{ filter.min_volume_105m if filter.min_volume_105m is not none }}"></div>
+    <div><label for="min_coverage">Min coverage ratio</label>
+      <input type="number" step="0.05" min="0" max="1" id="min_coverage" name="min_coverage" value="{{ filter.min_coverage_ratio if filter.min_coverage_ratio is not none }}"></div>
+    <div><label for="min_eps_surprise">Min EPS surprise %</label>
+      <input type="number" step="1" id="min_eps_surprise" name="min_eps_surprise" value="{{ filter.min_eps_surprise_pct if filter.min_eps_surprise_pct is not none }}"></div>
+    <div><label for="max_eps_surprise">Max EPS surprise %</label>
+      <input type="number" step="1" id="max_eps_surprise" name="max_eps_surprise" value="{{ filter.max_eps_surprise_pct if filter.max_eps_surprise_pct is not none }}"></div>
+
+    <div><label for="sort">Sort</label>
+      <select id="sort" name="sort">
+        {% for key in ORDER_BY %}
+          <option value="{{ key }}" {{ 'selected' if key == filter.order_by }}>{{ key }}</option>
+        {% endfor %}
+      </select></div>
+    <div><label for="limit">Rows per page</label>
+      <input type="number" id="limit" name="limit" min="1" max="1000" value="{{ filter.limit }}"></div>
+    <div class="actions">
+      <button type="submit">Apply</button>
+      <a class="tag" href="/events" style="align-self:center">reset</a>
+    </div>
+  </form>
+</div>
+
+{% include "_event_table.html" %}
+
+<h2>Cross-sectional views</h2>
+<div class="grid two">
+  <div class="panel"><div class="chart" data-figure='{{ figures.initial_vs_final | tojson }}'></div></div>
+  <div class="panel"><div class="chart" data-figure='{{ figures.delay_vs_retention | tojson }}'></div></div>
+  <div class="panel"><div class="chart" data-figure='{{ figures.surprise_vs_reaction | tojson }}'></div></div>
+  <div class="panel"><div class="chart" data-figure='{{ figures.class_distribution | tojson }}'></div></div>
+  <div class="panel"><div class="chart" data-figure='{{ figures.monthly | tojson }}'></div></div>
+</div>
+
+{% endblock %}

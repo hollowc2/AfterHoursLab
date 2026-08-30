@@ -1,0 +1,105 @@
+{# Results table plus its exclusion disclosure. Rendered standalone for HTMX swaps. #}
+<div id="results">
+  <div class="disclosure">
+    Showing <strong>{{ cohort.page_count }}</strong> of
+    <strong>{{ cohort.included_count }}</strong> included events;
+    <strong>{{ cohort.excluded_count }}</strong> of the
+    {{ cohort.universe_count }} after-close events in this date and symbol scope were
+    excluded by the active filters.
+    {% if cohort.excluded_by_status %}
+      Excluded by analysis status:
+      {% for status, total in cohort.excluded_by_status %}
+        <span class="tag">{{ status }} {{ total }}</span>
+      {% endfor %}
+    {% endif %}
+    {% if cohort.truncated %}
+      This page is capped at {{ filter.limit }} rows.
+    {% endif %}
+  </div>
+
+  <div class="panel scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>Symbol</th>
+          <th>Date</th>
+          <th>Class</th>
+          <th>Dir</th>
+          <th class="num">Initial</th>
+          <th class="num">PM+15m</th>
+          <th class="num">PM+105m</th>
+          <th class="num">Retention</th>
+          <th class="num">Delay</th>
+          <th class="num">MFE</th>
+          <th class="num">MAE</th>
+          <th class="num">Retrace</th>
+          <th class="num">Vol 105m</th>
+          <th class="num">EPS surp</th>
+          <th class="num">Coverage</th>
+          <th>Capture</th>
+          <th>Quality</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in cohort.rows %}
+        <tr>
+          <td><a href="/events/{{ row.symbol }}/{{ row.earnings_date.isoformat() }}">{{ row.symbol }}</a></td>
+          <td>{{ row.earnings_date.isoformat() }}</td>
+          <td>
+            {% if row.reaction_class %}
+              <span class="tag {{ row.reaction_class }}">{{ row.reaction_class }}</span>
+            {% else %}
+              <span class="tag">{{ row.analysis_status or 'not analyzed' }}</span>
+            {% endif %}
+          </td>
+          <td>{{ row.reaction_direction or '—' }}</td>
+          <td class="num {{ 'pos' if (row.initial_return or 0) > 0 else 'neg' if (row.initial_return or 0) < 0 }}">{{ row.initial_return | pct }}</td>
+          <td class="num">{{ row.return_15m | pct }}</td>
+          <td class="num {{ 'pos' if (row.return_105m or 0) > 0 else 'neg' if (row.return_105m or 0) < 0 }}">{{ row.return_105m | pct }}</td>
+          <td class="num">{{ row.retention | ratio }}</td>
+          <td class="num">{{ row.detection_delay_minutes if row.detection_delay_minutes is not none else '—' }}</td>
+          <td class="num">{{ row.max_favorable_excursion | pct }}</td>
+          <td class="num">{{ row.max_adverse_excursion | pct }}</td>
+          <td class="num">{{ row.max_retracement | pct }}</td>
+          <td class="num">{{ row.volume_105m | int_ }}</td>
+          <td class="num">{{ row.eps_surprise_pct | pct }}</td>
+          <td class="num">
+            {% if row.study_observed_minutes is not none %}
+              {{ row.study_observed_minutes }}/{{ STUDY_WINDOW_MINUTES }}
+            {% else %}—{% endif %}
+          </td>
+          <td>
+            {% if row.any_historical_backfill %}
+              <span class="tag provisional">backfill</span>
+            {% elif row.earnings_postmarket_collection_mode %}
+              <span class="tag final">scheduled</span>
+            {% else %}<span class="tag">—</span>{% endif %}
+          </td>
+          <td>
+            {% if row.data_quality_flags %}
+              <span class="tag bad" title="{{ row.data_quality_flags | join('; ') }}">{{ row.data_quality_flags | length }} flag(s)</span>
+            {% elif row.missing_phases %}
+              <span class="tag provisional" title="{{ row.missing_phases | join('; ') }}">{{ row.missing_phases | length }} phase(s) missing</span>
+            {% else %}<span class="tag final">clean</span>{% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="17" class="muted">No events matched this cohort.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="pager">
+    {% set page = page_number(filter) %}
+    {% if page > 1 %}
+      <a href="/events?{{ query(filter, page=page - 1) }}">&larr; page {{ page - 1 }}</a>
+    {% endif %}
+    <span class="muted">page {{ page }}</span>
+    {% if cohort.included_count > filter.offset + cohort.page_count %}
+      <a href="/events?{{ query(filter, page=page + 1) }}">page {{ page + 1 }} &rarr;</a>
+    {% endif %}
+    <span class="spacer"></span>
+    <a href="/events.csv?{{ query(filter) }}">Download this cohort as CSV</a>
+  </div>
+</div>

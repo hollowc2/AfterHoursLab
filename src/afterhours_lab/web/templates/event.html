@@ -1,0 +1,202 @@
+{% extends "base.html" %}
+{% block title %}{{ summary.symbol }} {{ summary.earnings_date.isoformat() }} — AfterHoursLab{% endblock %}
+{% block content %}
+
+<h1>{{ summary.symbol }} &mdash; {{ summary.earnings_date.isoformat() }}</h1>
+<p class="lede">
+  {% if summary.analyzed %}
+    Stored result: <span class="tag {{ summary.reaction_class }}">{{ summary.reaction_class or summary.analysis_status }}</span>
+    under <code>{{ summary.feature_version }}</code> /
+    <code>{{ summary.detector_version }}</code> /
+    <code>{{ summary.classifier_version }}</code>,
+    computed {{ summary.computed_at | et(true) }}.
+  {% else %}
+    <span class="tag provisional">not analyzed</span>
+    No persisted feature row exists for the current version triple. The chart below
+    still shows whatever authoritative evidence was captured.
+  {% endif %}
+</p>
+
+{% if summary.analysis_status_reason %}
+  <div class="disclosure warn">{{ summary.analysis_status_reason }}</div>
+{% endif %}
+{% if summary.data_quality_flags %}
+  <div class="disclosure warn">
+    Data-quality flags: {{ summary.data_quality_flags | join(', ') }}
+  </div>
+{% endif %}
+{% if summary.any_historical_backfill %}
+  <div class="disclosure warn">
+    This event was recovered by historical backfill rather than captured on schedule
+    (regular = {{ summary.earnings_regular_collection_mode }},
+    postmarket = {{ summary.earnings_postmarket_collection_mode }}).
+  </div>
+{% endif %}
+
+<div class="panel">
+  <div class="chart tall" data-figure='{{ figure | tojson }}'></div>
+</div>
+
+{% if following_figure %}
+<div class="panel">
+  <div class="chart" data-figure='{{ following_figure | tojson }}'></div>
+</div>
+{% else %}
+<div class="disclosure">The following session has not been captured for this event.</div>
+{% endif %}
+
+<div class="grid three">
+  <div class="panel">
+    <h2>Reaction</h2>
+    <dl class="kv">
+      <dt>Class</dt><dd>{{ summary.reaction_class or '—' }}</dd>
+      <dt>Direction</dt><dd>{{ summary.reaction_direction or '—' }}</dd>
+      <dt>Signal available</dt><dd>{{ summary.reaction_timestamp | et(true) }}</dd>
+      <dt>Detection delay</dt><dd>{{ summary.detection_delay_minutes if summary.detection_delay_minutes is not none else '—' }} min</dd>
+      <dt>Pre-close reference</dt><dd>{{ summary.reference_price | num }}</dd>
+      <dt>Initial return</dt><dd>{{ summary.initial_return | pct }}</dd>
+      <dt>VWAP proxy</dt><dd>{{ summary.reaction_vwap_proxy | num(4) }}</dd>
+    </dl>
+  </div>
+
+  <div class="panel">
+    <h2>Checkpoints</h2>
+    <dl class="kv">
+      <dt>PM+1m</dt><dd>{{ summary.return_1m | pct }}</dd>
+      <dt>PM+5m</dt><dd>{{ summary.return_5m | pct }}</dd>
+      <dt>PM+15m</dt><dd>{{ summary.return_15m | pct }}</dd>
+      <dt>PM+30m</dt><dd>{{ summary.return_30m | pct }}</dd>
+      <dt>PM+60m</dt><dd>{{ summary.return_60m | pct }}</dd>
+      <dt>PM+105m</dt><dd>{{ summary.return_105m | pct }}</dd>
+      <dt>Retention</dt><dd>{{ summary.retention | ratio }}</dd>
+    </dl>
+  </div>
+
+  <div class="panel">
+    <h2>Path extremes</h2>
+    <dl class="kv">
+      <dt>Window high</dt><dd>{{ summary.window_high_return | pct }}</dd>
+      <dt>Window low</dt><dd>{{ summary.window_low_return | pct }}</dd>
+      <dt>MFE</dt><dd>{{ summary.max_favorable_excursion | pct }}</dd>
+      <dt>MAE</dt><dd>{{ summary.max_adverse_excursion | pct }}</dd>
+      <dt>Max retracement</dt><dd>{{ summary.max_retracement | pct }}</dd>
+      <dt>Volume 105m</dt><dd>{{ summary.volume_105m | int_ }}</dd>
+      <dt>Study coverage</dt>
+      <dd>
+        {% if summary.study_observed_minutes is not none %}
+          {{ summary.study_observed_minutes }}/{{ STUDY_WINDOW_MINUTES }} min
+          ({{ summary.study_coverage_ratio | num }})
+        {% else %}—{% endif %}
+      </dd>
+    </dl>
+  </div>
+
+  <div class="panel">
+    <h2>Fundamentals</h2>
+    <dl class="kv">
+      <dt>EPS estimate</dt><dd>{{ summary.eps_estimate | num }}</dd>
+      <dt>EPS actual</dt><dd>{{ summary.eps_actual | num }}</dd>
+      <dt>EPS surprise</dt><dd>{{ summary.eps_surprise_pct | pct }}</dd>
+      <dt>Revenue estimate</dt><dd>{{ summary.revenue_estimate | int_ }}</dd>
+      <dt>Revenue actual</dt><dd>{{ summary.revenue_actual | int_ }}</dd>
+      <dt>Revenue surprise</dt><dd>{{ summary.revenue_surprise_pct | pct }}</dd>
+      <dt>Quarter</dt><dd>{{ summary.quarter or '—' }} {{ summary.year or '' }}</dd>
+    </dl>
+  </div>
+
+  <div class="panel">
+    <h2>Evidence</h2>
+    <dl class="kv">
+      <dt>Regular response</dt><dd>{{ detail.coverage_for('earnings_regular').response_sha256 | short_hash if detail.coverage_for('earnings_regular') else '—' }}</dd>
+      <dt>Postmarket response</dt><dd>{{ detail.coverage_for('earnings_postmarket').response_sha256 | short_hash if detail.coverage_for('earnings_postmarket') else '—' }}</dd>
+      <dt>Evidence digest</dt><dd>{{ summary.source_evidence_sha256 | short_hash }}</dd>
+      <dt>Regular capture</dt><dd>{{ summary.earnings_regular_collection_mode or '—' }}</dd>
+      <dt>Postmarket capture</dt><dd>{{ summary.earnings_postmarket_collection_mode or '—' }}</dd>
+      <dt>Bars loaded</dt><dd>{{ detail.bars | length }}</dd>
+    </dl>
+  </div>
+
+  <div class="panel">
+    <h2>Algorithm parameters</h2>
+    {% if detail.parameters %}
+      <dl class="kv">
+        {% for key, value in detail.parameters | dictsort %}
+          <dt>{{ key }}</dt><dd>{{ value }}</dd>
+        {% endfor %}
+      </dl>
+    {% else %}
+      <p class="muted">No stored parameters — this event has not been analyzed.</p>
+    {% endif %}
+  </div>
+</div>
+
+<h2>Phase coverage</h2>
+<div class="panel scroll">
+  <table>
+    <thead>
+      <tr>
+        <th>Phase</th><th>Market date</th><th>Session</th>
+        <th>Expected start</th><th>Expected end</th>
+        <th class="num">Observed</th><th class="num">Expected</th><th class="num">Ratio</th>
+        <th>Capture</th><th>Source</th><th>Response</th><th>Retrieved</th><th>Flags</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for phase in detail.coverage %}
+      <tr>
+        <td>{{ phase.phase }}</td>
+        <td>{{ phase.market_date.isoformat() }}</td>
+        <td>{{ phase.session }}</td>
+        <td>{{ phase.expected_start | et }}</td>
+        <td>{{ phase.expected_end | et }}</td>
+        <td class="num">{{ phase.observed_minutes }}</td>
+        <td class="num">{{ phase.expected_minutes }}</td>
+        <td class="num">{{ phase.coverage_ratio | num }}</td>
+        <td>{{ phase.collection_mode }}</td>
+        <td>{{ phase.source }}</td>
+        <td title="{{ phase.response_sha256 }}">{{ phase.response_sha256 | short_hash }}</td>
+        <td>{{ phase.retrieved_at | et(true) }}</td>
+        <td>{{ phase.data_quality_flags | join(', ') or '—' }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="13" class="muted">No coverage rows recorded for this event.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<h2 id="notes">Researcher notes</h2>
+<div class="grid two">
+  <div class="panel">
+    <ul class="notes">
+      {% for note in detail.notes %}
+        <li>
+          <div class="meta">{{ note.created_at | et(true) }} &middot; {{ note.author }}</div>
+          <p class="body">{{ note.body }}</p>
+          {% for tag in note.tags %}<span class="tag">{{ tag }}</span>{% endfor %}
+        </li>
+      {% else %}
+        <li class="muted">No notes yet. Discretionary observations live here, never in computed features.</li>
+      {% endfor %}
+    </ul>
+  </div>
+  <div class="panel">
+    <form method="post" action="/events/{{ summary.symbol }}/{{ summary.earnings_date.isoformat() }}/notes">
+      <label for="author">Author</label>
+      <input type="text" id="author" name="author" required>
+      <label for="body" style="margin-top:.5rem">Note</label>
+      <textarea id="body" name="body" rows="5" required></textarea>
+      <label for="tags" style="margin-top:.5rem">Tags (comma separated)</label>
+      <input type="text" id="tags" name="tags" placeholder="fade,thin-liquidity">
+      <div style="margin-top:.6rem"><button type="submit">Add note</button></div>
+      <p class="muted" style="margin-bottom:0">Notes are append-only; a correction is a new note.</p>
+    </form>
+  </div>
+</div>
+
+<h2>Open this event in a notebook</h2>
+<div class="panel">
+  <pre class="snippet">{{ notebook_snippet }}</pre>
+</div>
+
+{% endblock %}

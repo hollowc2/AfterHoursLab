@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}Data quality &amp; operations — AfterHoursLab{% endblock %}
+{% block content %}
+
+<h1>Data quality &amp; operations</h1>
+<p class="lede">
+  Kept separate from the research leaderboard on purpose: a missing capture phase is an
+  operations problem, and mixing it into reaction statistics invites reading a coverage
+  gap as a market observation.
+</p>
+
+<div class="grid two">
+  <div class="panel">
+    <h2>Last successful writes</h2>
+    <dl class="kv">
+      <dt>Earnings archive</dt>
+      <dd>{{ operations.last_earnings_event_created_at | et(true) }} ({{ operations.last_earnings_event_created_at | age }})</dd>
+      <dt>OHLCV coverage</dt>
+      <dd>{{ operations.last_coverage_retrieved_at | et(true) }} ({{ operations.last_coverage_retrieved_at | age }})</dd>
+      <dt>Bar evidence</dt>
+      <dd>{{ operations.last_bar_received_at | et(true) }} ({{ operations.last_bar_received_at | age }})</dd>
+      <dt>Quote evidence</dt>
+      <dd>{{ operations.last_quote_received_at | et(true) }} ({{ operations.last_quote_received_at | age }})</dd>
+      <dt>Feature persistence</dt>
+      <dd>{{ operations.last_feature_computed_at | et(true) }} ({{ operations.last_feature_computed_at | age }})</dd>
+    </dl>
+    <p class="muted">
+      These are read from what each writer actually wrote, so a scheduled job that
+      failed silently shows up here as a stale timestamp rather than as nothing at all.
+    </p>
+  </div>
+
+  <div class="panel">
+    <h2>Volumes</h2>
+    <dl class="kv">
+      <dt>Earnings events</dt><dd>{{ operations.events_total | int_ }} ({{ operations.events_amc | int_ }} after-close)</dd>
+      <dt>Coverage rows</dt><dd>{{ operations.coverage_rows | int_ }}</dd>
+      <dt>&nbsp;&nbsp;scheduled capture</dt><dd>{{ operations.scheduled_coverage_rows | int_ }}</dd>
+      <dt>&nbsp;&nbsp;historical backfill</dt><dd>{{ operations.backfill_coverage_rows | int_ }}</dd>
+      <dt>Persisted feature rows</dt><dd>{{ operations.feature_rows | int_ }}</dd>
+    </dl>
+  </div>
+</div>
+
+<h2>Issues in scope
+  {% if filter.date_from %}({{ filter.date_from.isoformat() }} to {{ filter.date_to.isoformat() if filter.date_to else 'now' }}){% endif %}
+</h2>
+
+<div class="disclosure">
+  {{ issues | length }} event(s) in this scope are not research-grade.
+  {% for kind, rows in grouped.items() %}
+    <span class="tag">{{ kind }} {{ rows | length }}</span>
+  {% endfor %}
+</div>
+
+<div class="panel scroll">
+  <table>
+    <thead>
+      <tr>
+        <th>Symbol</th><th>Date</th><th>Kind</th><th>Detail</th>
+        <th>Phases missing</th><th class="num">Observed</th><th class="num">Expected</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for issue in issues %}
+      <tr>
+        <td><a href="/events/{{ issue.symbol }}/{{ issue.earnings_date.isoformat() }}">{{ issue.symbol }}</a></td>
+        <td>{{ issue.earnings_date.isoformat() }}</td>
+        <td><span class="tag {{ 'bad' if issue.kind in ('missing_capture_phase', 'insufficient_data') else 'provisional' }}">{{ issue.kind }}</span></td>
+        <td>{{ issue.detail }}</td>
+        <td>{{ issue.phases_missing | join(', ') or '—' }}</td>
+        <td class="num">{{ issue.observed_minutes if issue.observed_minutes is not none else '—' }}</td>
+        <td class="num">{{ issue.expected_minutes if issue.expected_minutes is not none else '—' }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="7" class="muted">No quality issues in this scope.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% endblock %}
