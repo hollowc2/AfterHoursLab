@@ -1,0 +1,7 @@
+# AfterHoursLab: compute + insert earnings-reaction features — 8:25 PM America/New_York, weekdays.
+# Runs 20 min after the 8:05 PM ET post-market OHLCV capture (capture_ohlcv.cron); reads the
+# coverage that capture just wrote. Insert-only and advisory-locked, so a re-run is a no-op.
+# 8:25 PM ET is always the next UTC day; use 00:25/01:25 UTC slots + wrapper for DST.
+# Install (only ever touches its own wrapper line):
+#   crontab -l 2>/dev/null | grep -v run_persist_reactions_cron.sh | cat - infra/cron/persist_reactions.cron | crontab -
+25 0,1 * * 2-6 cd /opt/afterhours-lab && tools/run_persist_reactions_cron.sh >> /opt/afterhours-lab/persist_reactions.log 2>&1

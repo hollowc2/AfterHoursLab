@@ -492,10 +492,13 @@ any polling loop — capture keeps running whether or not the web server is up.
 
 ## Deploying on helios
 
-AfterHoursLab runs as its own container on `monitoring_net`, next to `schwab-gateway`
-(the `schwab_gateway_live` container is aliased as `schwab-gateway` on that network, so
-no host-port tunnel is needed from inside the network). There's no persistent process —
-`archive-earnings` runs on a daily cron, and `watch`/`smoke` are on-demand tools.
+AfterHoursLab runs on `monitoring_net`, next to `schwab-gateway` (the
+`schwab_gateway_live` container is aliased as `schwab-gateway` on that network, so no
+host-port tunnel is needed from inside the network). The batch entry points
+(`archive-earnings`, the OHLCV captures, `persist-reactions`) are `docker compose run`
+invocations from cron; `watch`/`smoke` are on-demand. The one persistent process is
+the research website (`afterhours-lab-web` service), which owns no polling loop and so
+can be restarted or redeployed without touching capture.
 
 ```bash
 # one-time setup on helios
@@ -521,8 +524,11 @@ EOF
 docker compose build
 docker compose run --rm afterhours-lab afterhours-lab-migrate
 
-# cron: see "Cron install" below — archive-earnings and all three capture windows
-# are installed the same way, from infra/cron/
+# cron: see "Cron install" below — archive-earnings, the OHLCV capture windows, and
+# persist-reactions are installed the same way, from infra/cron/
+
+# the research website: a long-running service, loopback-published on 127.0.0.1:8055
+docker compose up -d afterhours-lab-web
 
 # on-demand: watch the archived list live
 docker compose run --rm afterhours-lab afterhours-lab-watch --watchlist /app/data/watchlist.json
@@ -530,6 +536,10 @@ docker compose run --rm afterhours-lab afterhours-lab-watch --watchlist /app/dat
 # on-demand: gateway smoke test
 docker compose run --rm afterhours-lab afterhours-lab-smoke
 ```
+
+The `afterhours-lab-web` service carries `restart: unless-stopped`, so it comes back
+after a reboot or a crash. Redeploy it with `docker compose up -d --build
+afterhours-lab-web`; that is independent of the cron batch jobs.
 
 `./data` on the host persists `watchlist.json` and `last_run_status.json` across
 container runs (the image itself is stateless and rebuilt from source each deploy). A
@@ -539,7 +549,7 @@ quick check of the last cron outcome, without opening the log:
 cat /opt/afterhours-lab/data/last_run_status.json
 ```
 
-### Cron install (archive-earnings + authoritative OHLCV phases)
+### Cron install (archive-earnings + authoritative OHLCV phases + reaction features)
 
 The OHLCV wrapper performs bounded point-in-time reads after each phase is available:
 
@@ -549,6 +559,11 @@ The OHLCV wrapper performs bounded point-in-time reads after each phase is avail
 | `capture_ohlcv` | 9:35 AM | Prior event's following-day premarket |
 | `capture_ohlcv` | 4:05 PM | Today's regular + prior event's following regular |
 | `capture_ohlcv` | 8:05 PM | Today's complete postmarket |
+| `persist_reactions` | 8:25 PM | Computes + inserts reaction features from the coverage the 8:05 PM run just wrote |
+
+`persist_reactions` re-scans a short trailing window (four days), not just today, so a
+capture that finished late is still picked up the next evening. It is insert-only and
+takes its own advisory lock, so the overlap with a slow 8:05 PM run is harmless.
 
 **`archive_earnings` is the producer the other three read** — `capture_ohlcv.py` picks its
 symbols out of `earnings_events`, so a day this doesn't run is a day nothing gets
@@ -556,7 +571,7 @@ captured. It goes at 8:30 AM ET to sit between the two things it serves: late en
 that the previous evening's after-close prints have published actuals, and before the
 9:30 AM regular-session open for today's after-close names.
 
-All four are timing-sensitive enough that a plain single-UTC-slot cron line isn't good
+All five are timing-sensitive enough that a plain single-UTC-slot cron line isn't good
 enough across a DST transition — each one follows Butterflyguy's
 UTC-dual-slot-plus-wrapper pattern (`tools/run_morning_scan_cron.sh`): the crontab
 fires at two UTC hour candidates and the wrapper script no-ops unless it's actually the
@@ -570,6 +585,7 @@ same host:
 ```bash
 crontab -l 2>/dev/null | grep -v run_archive_earnings_cron.sh | cat - infra/cron/archive_earnings.cron | crontab -
 crontab -l 2>/dev/null | grep -v run_capture_ohlcv_cron.sh | cat - infra/cron/capture_ohlcv.cron | crontab -
+crontab -l 2>/dev/null | grep -v run_persist_reactions_cron.sh | cat - infra/cron/persist_reactions.cron | crontab -
 ```
 
 When upgrading from the quote-polling schedule, remove its three legacy wrapper lines

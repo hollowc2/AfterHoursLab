@@ -20,6 +20,29 @@ services:
     cap_drop: [ALL]
     command: ["afterhours-lab-archive-earnings", "--watchlist", "/app/data/watchlist.json"]
 
+  # The read-only research website. Unlike every other entry point here it is a
+  # persistent process, so it is a long-running service rather than a `compose run`
+  # from cron: `docker compose up -d afterhours-lab-web`. It owns no polling loop and
+  # writes only researcher notes — restarting or redeploying it never touches
+  # capture. Published on loopback only; reachable in-network as afterhours-lab-web.
+  afterhours-lab-web:
+    build: .
+    image: afterhours-lab:latest
+    env_file: .env
+    environment:
+      SCHWAB_GATEWAY_URL: http://schwab-gateway-candidate:8012
+    command: ["afterhours-lab-web", "--host", "0.0.0.0", "--port", "8055"]
+    ports:
+      - "127.0.0.1:8055:8055"
+    networks:
+      monitoring_net:
+        aliases: [afterhours-lab-web]
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    restart: unless-stopped
+
 networks:
   monitoring_net:
     external: true
