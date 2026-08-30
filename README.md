@@ -287,6 +287,53 @@ This is the "actual" half of an eventual expected-vs-actual move comparison once
 implied-vol/expected-move data exists (see the open gateway punch list); until then
 it stands alone as a report on what earnings prints actually did to the stock.
 
+## Retrospective reaction research
+
+The first research-cycle study measures the price-discovery path from the scheduled
+4:00 PM ET close through 5:45 PM ET (1:00-2:45 PM Pacific). It reads only the exact
+`/v1/session-history` responses selected by `earnings_ohlcv_coverage`; it does not use
+the superseded quote-poll-derived `candles` table, call the gateway, or place trades.
+
+```bash
+uv run afterhours-lab-reactions --from 2026-08-01 --to 2026-08-31
+uv run afterhours-lab-reactions --from 2026-08-01 --to 2026-08-31 \
+  --symbol NVDA --symbol CRM --json
+```
+
+Version 1 uses the exact 3:59-4:00 PM ET bar close as its reference price. Because
+gateway minute timestamps denote interval starts, the fixed 1/5/15/30/60/105-minute
+checkpoints are the closes of the 4:00/4:04/4:14/4:29/4:59/5:44 bars. A checkpoint is
+left missing rather than replaced with a nearby observed bar. The reaction detector
+is close-confirmed: the first minute-bar close at least 2% from the reference price is
+the signal, so an intraminute high or low alone does not trigger it.
+
+The report separates immediate continuation, spike-and-fade, delayed breakout,
+whipsaw, no trigger within the study window, and insufficient evidence. It also shows
+fixed-horizon returns and volume, a typical-price volume-weighted **VWAP proxy** (not
+an authoritative trade VWAP), excursions, retracement, and source quality flags. JSON
+output additionally retains collection modes, response hashes, stale state, and study
+coverage. Early-close sessions are explicitly excluded from this first fixed-clock
+study.
+
+`earnings_reaction_features` is the versioned storage contract for a later persistence
+step. The current command is intentionally report-only: it neither inserts derived
+rows nor overwrites prior research. Before stored features are enabled, the serializer
+will map calculation status, missing fields, parameters, cutoffs, and the canonical
+input digest into that table and enforce insert-only application behavior.
+
+Suggested daily research loop:
+
+1. At 12:30 PM Pacific, freeze the after-close candidate list and record pre-close
+   context without using later data.
+2. From 1:00-2:45 PM, observe reactions; the current command reconstructs this window
+   retrospectively after the authoritative 8:05 PM ET capture completes.
+3. After capture, generate the reaction report and retain no-trigger and insufficient
+   rows rather than silently dropping them.
+4. Resolve following-premarket/open/close outcomes separately so future information
+   never leaks into the same-day detector or classifier.
+5. Review aggregates weekly by class, direction, collection mode, liquidity, and
+   month before promoting any hypothesis to a formal out-of-sample backtest.
+
 ## Deploying on helios
 
 AfterHoursLab runs as its own container on `monitoring_net`, next to `schwab-gateway`
