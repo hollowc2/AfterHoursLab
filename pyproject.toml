@@ -43,6 +43,14 @@ research = [
     "polars>=1.0.0",
     "pyarrow>=17.0.0",
 ]
+# Jupyter for the research notebooks under notebooks/. They are clients of
+# afterhours_lab.research, so this pulls the research extra in with it. Not in the
+# default install: the CLI, capture jobs, and web server never import a notebook.
+notebooks = [
+    "afterhours-lab[research]",
+    "jupyterlab>=4.2.0",
+    "matplotlib>=3.9.0",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -57,6 +65,10 @@ exclude = ["/.env", "/.env.*", "/.git", "/.venv", "/dist"]
 [tool.ruff]
 target-version = "py312"
 line-length = 100
+# The notebooks under notebooks/ are research clients, not library code: they keep
+# a shared import cell and lean on interactive display, so import-sorting and
+# unused-import rules do not apply cleanly to them.
+extend-exclude = ["notebooks"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W"]

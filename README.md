@@ -421,6 +421,41 @@ Features are keyed by a version triple. `EventFilter.versions` defaults to what 
 installed code computes, so a cohort never mixes generations produced by different
 definitions.
 
+## Research notebooks
+
+`notebooks/` holds a small set of starter notebooks. **They are research clients, not
+a pipeline** — none contains SQL, a threshold, or a classification rule. Every number
+comes from `afterhours_lab.research`, and the connection pool is opened read-only, so
+a notebook cannot write to the database even by mistake.
+
+```bash
+uv sync --extra notebooks   # jupyterlab + matplotlib + the research extra
+uv run jupyter lab
+```
+
+| Notebook | What it covers |
+| --- | --- |
+| `01_event_exploration.ipynb` | Load a cohort, inspect one event's summary / coverage / bars / notes, exercise every export surface. |
+| `02_reaction_class_distributions.ipynb` | Class counts overall, by month, by direction, by collection mode; coverage and insufficient-data rates. |
+| `03_continuation_vs_fade.ipynb` | Retention distribution, detection delay vs retention, initial move vs 105-minute return, split by liquidity. |
+| `04_out_of_sample_validation.ipynb` | An explicit development / out-of-sample date split, OOS untouched until the end. Prototype of the eventual study record. |
+
+`afterhours_lab.research.notebook` is the one documented connection recipe:
+
+```python
+from afterhours_lab.research import EventFilter, fetch_cohort
+from afterhours_lab.research.notebook import research_pool, show_cohort
+
+pool = await research_pool()                 # read-only, from .env
+async with pool.acquire() as conn:
+    cohort = show_cohort(await fetch_cohort(conn, EventFilter(...)))
+```
+
+`show_cohort` / `describe_cohort` print the cohort's included/excluded counts, its
+`EventFilter`, and its version triple — the disclosure every notebook states near the
+top. Jupyter runs its own event loop, so `await` works at a cell's top level.
+Commit notebooks with their outputs cleared.
+
 ## Research website
 
 A read-only FastAPI + HTMX site over that layer, with server-built Plotly figures. It
