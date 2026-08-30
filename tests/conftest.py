@@ -158,6 +158,23 @@ def operations_row(**overrides: Any) -> dict[str, Any]:
     return row
 
 
+def monitor_health_row(**overrides: Any) -> dict[str, Any]:
+    row: dict[str, Any] = {
+        "last_cycle": RECEIVED_AT,
+        "last_success": RECEIVED_AT,
+        "last_degraded": None,
+        "active_window": True,
+        "status": "success",
+        "candidate_count": 1,
+        "inserted_count": 1,
+        "freshest_quote": RECEIVED_AT,
+        "error_kind": None,
+        "error_message": None,
+    }
+    row.update(overrides)
+    return row
+
+
 class FakeConnection:
     """Dispatches on SQL fragments the research layer actually emits."""
 
@@ -175,6 +192,9 @@ class FakeConnection:
         self.distribution: list[dict[str, Any]] = list(canned.get("distribution", []))
         self.monthly: list[dict[str, Any]] = list(canned.get("monthly", []))
         self.operations: dict[str, Any] = canned.get("operations", operations_row())
+        self.monitor_health: dict[str, Any] = canned.get(
+            "monitor_health", monitor_health_row()
+        )
         self.parameters: Any = canned.get("parameters", json.dumps({"threshold_pct": 2.0}))
         self.sql_seen: list[str] = []
 
@@ -200,6 +220,8 @@ class FakeConnection:
 
     async def fetchrow(self, sql: str, *args: Any) -> dict[str, Any] | None:
         self.sql_seen.append(sql)
+        if "WITH latest AS" in sql and "monitor_cycles" in sql:
+            return self.monitor_health
         if "universe_count" in sql:
             return {
                 "universe_count": self.universe_count,

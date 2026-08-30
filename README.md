@@ -490,15 +490,56 @@ computed feature. A correction is a new note, not an edit.
 The site is a client of the same layer as the CLI and notebooks, and it does not own
 any polling loop — capture keeps running whether or not the web server is up.
 
+## Live quote monitor and `/today` updates
+
+`afterhours-lab-monitor` is an always-on raw-evidence daemon. On XNYS sessions it
+polls one batched quote request for that date's archived `hour = 'amc'` symbols every
+5 seconds from 3:50 PM through 8:15 PM Eastern. The interval and window are explicit
+CLI settings (`--interval-seconds`, `--window-start`, `--window-end`). It recalculates
+the Eastern date on every scheduling cycle, sleeps outside the window, and makes no
+gateway request when there are no candidates.
+
+The monitor writes `quote_evidence` only. It does not construct bars, calculate a
+return or spread, classify a reaction, or replace the independent 8:05 PM OHLCV and
+8:25 PM feature-persistence jobs. A non-blocking Postgres advisory lock allows one
+instance to poll. Natural-key conflicts are counted and ignored without overwriting
+the original observation. Migration 009 adds the append-only `monitor_cycles`
+operational ledger so `/today` and `/quality` can distinguish success, no candidates,
+inactive windows, and gateway degradation.
+
+`/today/stream` sends an immediate server-rendered SSE snapshot and emits another only
+when its deterministic database-state digest changes. It uses a short database
+acquisition every two seconds per connected client, sends 15-second keepalives, and
+releases the acquisition before sleeping. JavaScript only swaps the server-produced
+fragment and reports connection state; it performs no market calculation. A normal
+page load remains complete without JavaScript. Historical dates get one immutable
+event and do not reconnect.
+
+```bash
+# deterministic one-shot; bypasses the time gate but still uses the DB and gateway
+uv run afterhours-lab-monitor --once --date 2026-08-20
+
+docker compose up -d afterhours-lab-monitor
+docker compose logs -f --tail=200 afterhours-lab-monitor
+docker compose stop afterhours-lab-monitor
+
+# deployment smoke after applying migration 009
+docker compose run --rm afterhours-lab afterhours-lab-monitor --once
+```
+
+Capacity is one gateway request per polling interval regardless of candidate count,
+plus roughly one short research-layer read every two seconds per active SSE client.
+If client count grows materially, replace per-client polling with a shared notifier.
+
 ## Deploying on helios
 
 AfterHoursLab runs on `monitoring_net`, next to `schwab-gateway` (the
 `schwab_gateway_live` container is aliased as `schwab-gateway` on that network, so no
 host-port tunnel is needed from inside the network). The batch entry points
 (`archive-earnings`, the OHLCV captures, `persist-reactions`) are `docker compose run`
-invocations from cron; `watch`/`smoke` are on-demand. The one persistent process is
-the research website (`afterhours-lab-web` service), which owns no polling loop and so
-can be restarted or redeployed without touching capture.
+invocations from cron; `watch`/`smoke` are on-demand. The persistent processes are the
+research website and raw-evidence monitor. They are separate services: the web process
+owns no gateway client, and either can restart without interrupting nightly jobs.
 
 ```bash
 # one-time setup on helios
@@ -530,6 +571,9 @@ docker compose run --rm afterhours-lab afterhours-lab-migrate
 # the research website: a long-running service, loopback-published on 127.0.0.1:8055
 docker compose up -d afterhours-lab-web
 
+# the raw quote monitor: long-running, with no published port
+docker compose up -d afterhours-lab-monitor
+
 # on-demand: watch the archived list live
 docker compose run --rm afterhours-lab afterhours-lab-watch --watchlist /app/data/watchlist.json
 
@@ -537,9 +581,21 @@ docker compose run --rm afterhours-lab afterhours-lab-watch --watchlist /app/dat
 docker compose run --rm afterhours-lab afterhours-lab-smoke
 ```
 
-The `afterhours-lab-web` service carries `restart: unless-stopped`, so it comes back
-after a reboot or a crash. Redeploy it with `docker compose up -d --build
-afterhours-lab-web`; that is independent of the cron batch jobs.
+Both persistent services carry `restart: unless-stopped`. Rebuild them independently
+with `docker compose up -d --build afterhours-lab-web` or `docker compose up -d
+--build afterhours-lab-monitor`; neither command changes the cron batch jobs.
+
+Phase 4 rollback is service-first and preserves evidence: stop the monitor, redeploy
+the previous web SHA/image, and leave migration 009 in place. Migrations are
+forward-only, and its new table and nullable quote columns are backward compatible.
+
+```bash
+docker compose stop afterhours-lab-monitor
+git checkout <previous-approved-sha>
+docker compose build afterhours-lab-web
+docker compose up -d afterhours-lab-web
+docker compose logs --tail=200 afterhours-lab-web
+```
 
 `./data` on the host persists `watchlist.json` and `last_run_status.json` across
 container runs (the image itself is stateless and rebuilt from source each deploy). A

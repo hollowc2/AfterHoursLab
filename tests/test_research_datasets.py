@@ -22,6 +22,7 @@ from afterhours_lab.research import (
     fetch_cohort,
     fetch_event_bars,
     fetch_event_detail,
+    fetch_monitor_health,
     fetch_operations_snapshot,
     fetch_quality_issues,
     fetch_today,
@@ -210,6 +211,18 @@ async def test_operations_snapshot_reads_each_writer_s_own_watermark() -> None:
     assert snapshot.last_bar_received_at == RECEIVED_AT
     assert snapshot.backfill_coverage_rows == 2
     assert snapshot.feature_rows == 7
+
+
+async def test_monitor_health_maps_durable_operational_state() -> None:
+    conn = FakeConnection()
+    health = await fetch_monitor_health(conn, EARNINGS_DATE)
+
+    assert health.market_date == EARNINGS_DATE
+    assert health.status == "success"
+    assert health.active_window is True
+    assert health.candidate_count == 1
+    assert health.last_inserted_quote_count == 1
+    assert health.freshest_quote_at == RECEIVED_AT
 
 
 async def test_quality_issues_name_the_specific_defect() -> None:

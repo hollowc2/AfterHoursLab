@@ -85,6 +85,27 @@ def test_today_rejects_a_malformed_date(full_conn: FakeConnection) -> None:
     assert "must be an ISO date" in response.text
 
 
+def test_historical_today_page_uses_one_shot_sse_and_disables_reconnect(
+    full_conn: FakeConnection,
+) -> None:
+    with client_for(full_conn) as client:
+        page = client.get(f"/today?date={DATE}")
+        stream = client.get(f"/today/stream?date={DATE}")
+
+    assert "Historical snapshot — live updates disabled" in page.text
+    assert "/static/today.js" not in page.text
+    assert stream.headers["content-type"].startswith("text/event-stream")
+    assert "event: snapshot" in stream.text
+    assert "id: " in stream.text
+    assert "TEST" in stream.text
+
+
+def test_today_stream_rejects_a_malformed_date(full_conn: FakeConnection) -> None:
+    with client_for(full_conn) as client:
+        response = client.get("/today/stream?date=nope")
+    assert response.status_code == 400
+
+
 def test_explorer_discloses_included_and_excluded_counts(full_conn: FakeConnection) -> None:
     with client_for(full_conn) as client:
         body = client.get("/events").text

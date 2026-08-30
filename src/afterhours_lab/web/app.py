@@ -10,8 +10,11 @@ its own table and never mixed into computed features.
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import datetime as dt
+import hashlib
+import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -19,7 +22,13 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    PlainTextResponse,
+    RedirectResponse,
+    StreamingResponse,
+)
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.datastructures import QueryParams
@@ -39,6 +48,7 @@ from afterhours_lab.research import (
     fetch_class_distribution,
     fetch_cohort,
     fetch_event_detail,
+    fetch_monitor_health,
     fetch_monthly_counts,
     fetch_operations_snapshot,
     fetch_quality_issues,
@@ -63,6 +73,8 @@ STATIC_DIR = PACKAGE_DIR / "static"
 DEFAULT_EXPLORER_DAYS = 180
 CSV_MAX_ROWS = 5000
 CHART_MAX_ROWS = 2000
+SSE_POLL_SECONDS = 2.0
+SSE_KEEPALIVE_SECONDS = 15.0
 
 
 def _fmt_pct(value: float | None, digits: int = 2) -> str:
@@ -178,31 +190,112 @@ def create_app(pool: DatabasePool | None = None) -> FastAPI:
 
     # ------------------------------------------------------------------- today
 
-    @app.get("/today", response_class=HTMLResponse)
-    async def today(request: Request, date: str | None = None) -> HTMLResponse:
+    def parse_market_date(date: str | None) -> dt.date:
         try:
-            market_date = (
-                dt.date.fromisoformat(date)
-                if date
-                else dt.datetime.now(EASTERN).date()
-            )
+            return dt.date.fromisoformat(date) if date else dt.datetime.now(EASTERN).date()
         except ValueError as exc:
             raise QueryError(f"date must be an ISO date, got {date!r}") from exc
 
+    async def load_today(request: Request, market_date: dt.date) -> dict[str, Any]:
         async with request.app.state.pool.acquire() as conn:
             candidates = await fetch_today(conn, market_date)
             operations = await fetch_operations_snapshot(conn)
+            monitor_health = await fetch_monitor_health(conn, market_date)
+        return {
+            "market_date": market_date,
+            "candidates": candidates,
+            "operations": operations,
+            "monitor_health": monitor_health,
+            "generated_at": dt.datetime.now(dt.timezone.utc),
+        }
+
+    @app.get("/today", response_class=HTMLResponse)
+    async def today(request: Request, date: str | None = None) -> HTMLResponse:
+        market_date = parse_market_date(date)
+        snapshot = await load_today(request, market_date)
+        is_live_date = market_date == dt.datetime.now(EASTERN).date()
         return render(
             request,
             "today.html",
             {
                 "page": "today",
-                "market_date": market_date,
                 "previous_date": market_date - dt.timedelta(days=1),
                 "next_date": market_date + dt.timedelta(days=1),
-                "candidates": candidates,
-                "operations": operations,
-                "generated_at": dt.datetime.now(dt.timezone.utc),
+                "is_live_date": is_live_date,
+                **snapshot,
+            },
+        )
+
+    def snapshot_digest(snapshot: dict[str, Any]) -> str:
+        semantic = {
+            "candidates": [row.to_record() for row in snapshot["candidates"]],
+            "operations": snapshot["operations"].to_record(),
+            "monitor_health": snapshot["monitor_health"].to_record(),
+        }
+        encoded = json.dumps(semantic, default=str, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(encoded.encode()).hexdigest()
+
+    def snapshot_event(snapshot: dict[str, Any], event_id: str) -> str:
+        html = templates.get_template("_today_snapshot.html").render(snapshot)
+        payload = json.dumps(
+            {
+                "html": html,
+                "market_date": snapshot["market_date"].isoformat(),
+                "generated_at": snapshot["generated_at"].isoformat(),
+                "state": "connected",
+            },
+            separators=(",", ":"),
+        )
+        return f"id: {event_id}\nevent: snapshot\ndata: {payload}\n\n"
+
+    @app.get("/today/stream")
+    async def today_stream(request: Request, date: str | None = None) -> StreamingResponse:
+        market_date = parse_market_date(date)
+        historical = market_date != dt.datetime.now(EASTERN).date()
+
+        async def events() -> AsyncIterator[str]:
+            previous_digest: str | None = None
+            last_frame_at = asyncio.get_running_loop().time()
+            while not await request.is_disconnected():
+                try:
+                    snapshot = await load_today(request, market_date)
+                    digest = snapshot_digest(snapshot)
+                    if digest != previous_digest:
+                        yield snapshot_event(snapshot, digest)
+                        previous_digest = digest
+                        last_frame_at = asyncio.get_running_loop().time()
+                    if historical:
+                        return
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    payload = json.dumps(
+                        {
+                            "state": "unavailable",
+                            "message": (
+                                "Database state is temporarily unavailable; "
+                                "no market data was substituted."
+                            ),
+                        },
+                        separators=(",", ":"),
+                    )
+                    yield f"event: degraded\ndata: {payload}\n\n"
+                    last_frame_at = asyncio.get_running_loop().time()
+                    if historical:
+                        return
+
+                await asyncio.sleep(SSE_POLL_SECONDS)
+                if asyncio.get_running_loop().time() - last_frame_at >= SSE_KEEPALIVE_SECONDS:
+                    yield ": keepalive\n\n"
+                    last_frame_at = asyncio.get_running_loop().time()
+
+        return StreamingResponse(
+            events(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache, no-transform",
+                "X-Accel-Buffering": "no",
+                "Connection": "keep-alive",
             },
         )
 
@@ -355,6 +448,7 @@ def create_app(pool: DatabasePool | None = None) -> FastAPI:
         event_filter = explorer_filter(request)
         async with request.app.state.pool.acquire() as conn:
             operations = await fetch_operations_snapshot(conn)
+            monitor_health = await fetch_monitor_health(conn, dt.datetime.now(EASTERN).date())
             issues = await fetch_quality_issues(conn, event_filter)
         grouped: dict[str, list] = {}
         for issue in issues:
@@ -366,6 +460,7 @@ def create_app(pool: DatabasePool | None = None) -> FastAPI:
                 "page": "quality",
                 "filter": event_filter,
                 "operations": operations,
+                "monitor_health": monitor_health,
                 "issues": issues,
                 "grouped": grouped,
             },

@@ -1,0 +1,78 @@
+<div class="panel">
+  <div class="grid three">
+    <div>
+      <h2>Data freshness</h2>
+      <dl class="kv">
+        <dt>Last quote evidence</dt><dd>{{ operations.last_quote_received_at | age }}</dd>
+        <dt>Last bar evidence</dt><dd>{{ operations.last_bar_received_at | age }}</dd>
+        <dt>Last coverage row</dt><dd>{{ operations.last_coverage_retrieved_at | age }}</dd>
+        <dt>Last feature computed</dt><dd>{{ operations.last_feature_computed_at | age }}</dd>
+      </dl>
+    </div>
+    <div>
+      <h2>Live monitor</h2>
+      <dl class="kv">
+        <dt>State</dt><dd>{{ monitor_health.status or 'never observed' }}</dd>
+        <dt>Active window</dt><dd>{{ 'yes' if monitor_health.active_window else 'no' if monitor_health.active_window is not none else 'unknown' }}</dd>
+        <dt>Last successful cycle</dt><dd>{{ monitor_health.last_success_at | age }}</dd>
+        <dt>Last degraded cycle</dt><dd>{{ monitor_health.last_degraded_at | age }}</dd>
+        <dt>Monitored candidates</dt><dd>{{ monitor_health.candidate_count }}</dd>
+        <dt>Quotes inserted last cycle</dt><dd>{{ monitor_health.last_inserted_quote_count }}</dd>
+        <dt>Freshest monitor quote</dt><dd>{{ monitor_health.freshest_quote_at | age }}</dd>
+      </dl>
+      {% if monitor_health.error_kind %}
+      <div class="disclosure warn">{{ monitor_health.error_kind }}: {{ monitor_health.error_message }}</div>
+      {% endif %}
+    </div>
+    <div>
+      <h2>Coverage</h2>
+      <dl class="kv">
+        <dt>Candidates</dt><dd>{{ candidates | length }}</dd>
+        <dt>With pre-close reference</dt><dd>{{ candidates | selectattr('pre_close_reference') | list | length }}</dd>
+        <dt>With quote evidence</dt><dd>{{ candidates | selectattr('quote_received_at') | list | length }}</dd>
+        <dt>Finalized</dt><dd>{{ candidates | selectattr('finalized') | list | length }}</dd>
+        <dt>Rendered</dt><dd>{{ generated_at | et(true) }}</dd>
+      </dl>
+    </div>
+  </div>
+</div>
+{% if not candidates %}
+<div class="disclosure">
+  No after-close earnings events are archived for {{ market_date.isoformat() }}.
+  This is not presented as a market observation.
+</div>
+{% else %}
+<div class="panel scroll">
+  <table>
+    <thead><tr>
+      <th>Symbol</th><th class="num">Pre-close</th><th class="num">Bid</th>
+      <th class="num">Ask</th><th class="num">Mark</th><th class="num">Spread</th>
+      <th class="num">Spread %</th><th class="num">Quote vol</th>
+      <th class="num">Provisional move</th><th>First {{ THRESHOLD_PCT }}% cross</th>
+      <th class="num">PM minutes</th><th class="num">EPS surprise</th><th>State</th><th>Health</th>
+    </tr></thead>
+    <tbody>
+    {% for row in candidates %}
+      <tr>
+        <td><a href="/events/{{ row.symbol }}/{{ row.earnings_date.isoformat() }}">{{ row.symbol }}</a></td>
+        <td class="num">{{ row.pre_close_reference | num }}</td>
+        <td class="num">{{ row.bid | num }}</td><td class="num">{{ row.ask | num }}</td>
+        <td class="num">{{ row.mark | num }}</td><td class="num">{{ row.spread | num }}</td>
+        <td class="num">{{ row.spread_pct | num }}</td><td class="num">{{ row.quote_volume | int_ }}</td>
+        <td class="num {{ 'pos' if (row.provisional_move_pct or 0) > 0 else 'neg' if (row.provisional_move_pct or 0) < 0 }}">{{ row.provisional_move_pct | pct }}</td>
+        <td>{% if row.first_threshold_cross_ts %}{{ row.first_threshold_cross_ts | et }} <span class="muted">({{ row.first_threshold_cross_pct | pct }})</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td class="num">{{ row.provisional_bar_minutes }}</td><td class="num">{{ row.eps_surprise_pct | pct }}</td>
+        <td>{% if row.finalized %}<span class="tag final">finalized</span> <span class="tag {{ row.finalized_class }}">{{ row.finalized_class }}</span>{% else %}<span class="tag provisional">provisional</span>{% endif %}</td>
+        <td>{% if row.degradation_reasons %}<span class="tag bad" title="{{ row.degradation_reasons | join('; ') }}">{{ row.degradation_reasons | length }} issue(s)</span>{% else %}<span class="tag final">ok</span>{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+<h2>Degradation detail</h2>
+<div class="panel"><dl class="kv">
+{% for row in candidates %}
+  <dt>{{ row.symbol }}</dt><dd>{{ row.degradation_reasons | join('; ') if row.degradation_reasons else 'no degradation reported' }}</dd>
+{% endfor %}
+</dl></div>
+{% endif %}

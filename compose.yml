@@ -43,6 +43,24 @@ services:
     cap_drop: [ALL]
     restart: unless-stopped
 
+  # Raw quote-evidence writer. Its Eastern-time gate owns scheduling; this service
+  # has no host port and is independent of the web and nightly batch processes.
+  afterhours-lab-monitor:
+    build: .
+    image: afterhours-lab:latest
+    env_file: .env
+    environment:
+      SCHWAB_GATEWAY_URL: http://schwab-gateway-candidate:8012
+    command: ["afterhours-lab-monitor"]
+    networks:
+      monitoring_net:
+        aliases: [afterhours-lab-monitor]
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    restart: unless-stopped
+
 networks:
   monitoring_net:
     external: true

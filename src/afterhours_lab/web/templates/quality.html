@@ -40,6 +40,17 @@
       <dt>Persisted feature rows</dt><dd>{{ operations.feature_rows | int_ }}</dd>
     </dl>
   </div>
+
+  <div class="panel">
+    <h2>Live monitor today</h2>
+    <dl class="kv">
+      <dt>Status</dt><dd>{{ monitor_health.status or 'never observed' }}</dd>
+      <dt>Last successful cycle</dt><dd>{{ monitor_health.last_success_at | et(true) }}</dd>
+      <dt>Last degraded cycle</dt><dd>{{ monitor_health.last_degraded_at | et(true) }}</dd>
+      <dt>Freshest quote</dt><dd>{{ monitor_health.freshest_quote_at | et(true) }}</dd>
+      <dt>Candidates / inserted</dt><dd>{{ monitor_health.candidate_count }} / {{ monitor_health.last_inserted_quote_count }}</dd>
+    </dl>
+  </div>
 </div>
 
 <h2>Issues in scope

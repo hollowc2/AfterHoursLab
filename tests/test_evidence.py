@@ -46,6 +46,8 @@ def quote_response() -> QuoteResponseV1:
                     "last_size": 5,
                     "mark": 225.15,
                     "volume": 123456,
+                    "close": 224.0,
+                    "net_percent_change": 0.51,
                     "stale": False,
                     "age_seconds": 1.0,
                     "data_quality_flags": ["after_hours"],
@@ -94,12 +96,13 @@ async def test_quote_evidence_preserves_contract_and_marks_status_metadata_unkno
 
     row = conn.rows[0]
     assert "INSERT INTO quote_evidence" in conn.sql
-    assert row[:19] == (
+    assert row[:21] == (
         "AAPL", EVENT, RECEIVED, "post_market", "after_hours", dt.date(2026, 8, 25),
-        225.1, 225.2, 10, 20, 225.15, 5, 225.15, 123456, "schwab", False, 1.0,
+        225.1, 225.2, 10, 20, 225.15, 5, 225.15, 123456, 224.0, 0.51,
+        "schwab", False, 1.0,
         ["after_hours"], "1.0",
     )
-    assert row[19:] == (None, None, None, None)
+    assert row[21:] == (None, None, None, None)
 
 
 async def test_minute_history_preserves_ohlcv_provenance_and_unknown_session() -> None:

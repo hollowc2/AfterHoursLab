@@ -450,6 +450,26 @@ class OperationsSnapshot:
 
 
 @dataclasses.dataclass(frozen=True)
+class MonitorHealth:
+    """Durable operational state for one requested market date."""
+
+    market_date: dt.date
+    last_cycle_at: dt.datetime | None
+    last_success_at: dt.datetime | None
+    last_degraded_at: dt.datetime | None
+    active_window: bool | None
+    status: str | None
+    candidate_count: int
+    last_inserted_quote_count: int
+    freshest_quote_at: dt.datetime | None
+    error_kind: str | None
+    error_message: str | None
+
+    def to_record(self) -> dict[str, Any]:
+        return dataclasses.asdict(self)
+
+
+@dataclasses.dataclass(frozen=True)
 class QualityIssue:
     """One reason an event is not research-grade, with the numbers behind it."""
 
@@ -839,6 +859,20 @@ async def _fetch_parameters(
 # ------------------------------------------------------------------------- today
 
 
+async def fetch_monitor_candidates(conn, market_date: dt.date) -> tuple[str, ...]:
+    """Archived after-close symbols the live monitor should poll."""
+    rows = await conn.fetch(
+        """
+        SELECT symbol
+        FROM earnings_events
+        WHERE earnings_date = $1 AND hour = 'amc'
+        ORDER BY symbol
+        """,
+        market_date,
+    )
+    return tuple(row["symbol"] for row in rows)
+
+
 async def fetch_today(
     conn,
     market_date: dt.date,
@@ -1017,6 +1051,54 @@ async def fetch_operations_snapshot(conn) -> OperationsSnapshot:
         scheduled_coverage_rows=row["scheduled_rows"],
         backfill_coverage_rows=row["backfill_rows"],
         feature_rows=row["feature_rows"],
+    )
+
+
+async def fetch_monitor_health(conn, market_date: dt.date) -> MonitorHealth:
+    row = await conn.fetchrow(
+        """
+        WITH latest AS (
+            SELECT * FROM monitor_cycles
+            WHERE market_date = $1
+            ORDER BY cycle_completed_at DESC, id DESC
+            LIMIT 1
+        ), degraded AS (
+            SELECT * FROM monitor_cycles
+            WHERE market_date = $1 AND status = 'degraded'
+            ORDER BY cycle_completed_at DESC, id DESC
+            LIMIT 1
+        )
+        SELECT
+            (SELECT cycle_completed_at FROM latest) AS last_cycle,
+            (SELECT max(cycle_completed_at) FROM monitor_cycles
+              WHERE market_date = $1 AND status IN ('success', 'no_candidates')) AS last_success,
+            (SELECT max(cycle_completed_at) FROM monitor_cycles
+              WHERE market_date = $1 AND status = 'degraded') AS last_degraded,
+            (SELECT active_window FROM latest) AS active_window,
+            (SELECT status FROM latest) AS status,
+            COALESCE((SELECT candidate_count FROM latest), 0) AS candidate_count,
+            COALESCE((SELECT inserted_quote_count FROM latest), 0) AS inserted_count,
+            (SELECT max(gateway_received_at)
+               FROM quote_evidence
+              WHERE earnings_date = $1
+                AND capture_window = 'live_reaction_monitor') AS freshest_quote,
+            (SELECT error_kind FROM degraded) AS error_kind,
+            (SELECT error_message FROM degraded) AS error_message
+        """,
+        market_date,
+    )
+    return MonitorHealth(
+        market_date=market_date,
+        last_cycle_at=row["last_cycle"],
+        last_success_at=row["last_success"],
+        last_degraded_at=row["last_degraded"],
+        active_window=row["active_window"],
+        status=row["status"],
+        candidate_count=row["candidate_count"],
+        last_inserted_quote_count=row["inserted_count"],
+        freshest_quote_at=row["freshest_quote"],
+        error_kind=row["error_kind"],
+        error_message=row["error_message"],
     )
 
 

@@ -41,6 +41,8 @@ async def preserve_quotes(
             quote.last_size,
             quote.mark,
             quote.volume,
+            quote.close,
+            quote.net_percent_change,
             quote.source,
             quote.stale,
             quote.age_seconds,
@@ -60,13 +62,14 @@ async def preserve_quotes(
         INSERT INTO quote_evidence (
             symbol, event_timestamp, gateway_received_at, session,
             capture_window, earnings_date, bid, ask, bid_size, ask_size,
-            last, last_size, mark, volume, source, stale, age_seconds,
-            data_quality_flags, schema_version, exto_eligible, exchange_status,
+            last, last_size, mark, volume, close, net_percent_change,
+            source, stale, age_seconds, data_quality_flags, schema_version,
+            exto_eligible, exchange_status,
             trading_status, session_eligible
         )
         VALUES (
             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-            $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23
+            $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25
         )
         ON CONFLICT (symbol, gateway_received_at, capture_window, earnings_date)
         DO NOTHING

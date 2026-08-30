@@ -34,6 +34,7 @@ afterhours-lab-moves = "afterhours_lab.moves:main"
 afterhours-lab-reactions = "afterhours_lab.reactions:main"
 afterhours-lab-persist-reactions = "afterhours_lab.persist_reactions:main"
 afterhours-lab-web = "afterhours_lab.web.app:main"
+afterhours-lab-monitor = "afterhours_lab.monitor:main"
 
 [project.optional-dependencies]
 # DataFrame and Parquet exports are optional: the CLI, capture jobs, and the web

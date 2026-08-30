@@ -10,6 +10,7 @@ def test_discover_migrations_finds_initial_migration() -> None:
     assert "005_schwab_premarket_boundary" in versions
     assert "006_ohlcv_collection_mode" in versions
     assert "007_earnings_reaction_features" in versions
+    assert "009_live_monitor" in versions
 
 
 def test_discover_migrations_orders_by_filename(tmp_path) -> None:
