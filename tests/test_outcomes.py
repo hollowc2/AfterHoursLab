@@ -14,6 +14,7 @@ from afterhours_lab.outcomes import (
     source_evidence_digest,
 )
 from afterhours_lab.persist_outcomes import INSERT_COLUMNS, INSERT_SQL, persist_outcomes
+from afterhours_lab.research.outcomes import fetch_following_session_evidence
 
 UTC = dt.UTC
 DATE = dt.date(2026, 7, 2)
@@ -190,3 +191,27 @@ async def test_transient_not_yet_available_is_never_persisted() -> None:
     assert summary.not_yet_available == 1
     assert summary.inserted == summary.conflicted == 0
     assert conn.calls == []
+
+
+@pytest.mark.asyncio
+async def test_evidence_read_preserves_event_identity_when_coverage_is_missing() -> None:
+    class MissingCoverageConnection:
+        async def fetch(self, sql: str, *_args):
+            assert "AS event_symbol" in sql
+            return [
+                {
+                    "event_symbol": "MISS",
+                    "event_earnings_date": DATE,
+                    "symbol": None,
+                    "earnings_date": None,
+                    "phase": None,
+                }
+            ]
+
+    evidence = await fetch_following_session_evidence(
+        MissingCoverageConnection(), from_date=DATE, to_date=DATE
+    )
+    assert len(evidence) == 1
+    assert evidence[0].symbol == "MISS"
+    assert evidence[0].earnings_date == DATE
+    assert evidence[0].regular is evidence[0].premarket is evidence[0].following_regular is None

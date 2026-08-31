@@ -48,7 +48,7 @@ async def fetch_following_session_evidence(
     """Select bars only through each phase's exact authoritative coverage identity."""
     rows = await conn.fetch(
         """
-        SELECT e.symbol, e.earnings_date, c.*
+        SELECT e.symbol AS event_symbol, e.earnings_date AS event_earnings_date, c.*
         FROM earnings_events e
         LEFT JOIN earnings_ohlcv_coverage c
           ON c.symbol=e.symbol AND c.earnings_date=e.earnings_date
@@ -64,7 +64,7 @@ async def fetch_following_session_evidence(
     )
     grouped: dict[tuple[str, dt.date], dict[str, OutcomeCoverage]] = {}
     for row in rows:
-        key = (row["symbol"], row["earnings_date"])
+        key = (row["event_symbol"], row["event_earnings_date"])
         grouped.setdefault(key, {})
         if row["phase"] is None:
             continue
@@ -78,7 +78,7 @@ async def fetch_following_session_evidence(
               AND ts >= $6 AND ts < $7
             ORDER BY ts, id
             """,
-            row["symbol"],
+            row["event_symbol"],
             row["session"],
             row["market_date"],
             row["gateway_received_at"],
@@ -88,7 +88,9 @@ async def fetch_following_session_evidence(
         )
         grouped[key][row["phase"]] = _coverage(row, bars)
     result = []
-    for (symbol, earnings_date), phases in sorted(grouped.items(), key=lambda item: item[0][::-1]):
+    for (symbol, earnings_date), phases in sorted(
+        grouped.items(), key=lambda item: (item[0][1], item[0][0])
+    ):
         following_date = next_trading_day(earnings_date)
         _, following_close = regular_session_bounds(following_date)
         result.append(
