@@ -23,7 +23,10 @@ DATE = EARNINGS_DATE.isoformat()
 
 
 def client_for(conn: FakeConnection) -> TestClient:
-    return TestClient(create_app(FakePool(conn)))
+    return TestClient(
+        create_app(FakePool(conn)),
+        backend_options={"use_uvloop": True},
+    )
 
 
 @pytest.fixture

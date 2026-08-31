@@ -33,6 +33,8 @@ afterhours-lab-audit-ohlcv = "afterhours_lab.audit_ohlcv:main"
 afterhours-lab-moves = "afterhours_lab.moves:main"
 afterhours-lab-reactions = "afterhours_lab.reactions:main"
 afterhours-lab-persist-reactions = "afterhours_lab.persist_reactions:main"
+afterhours-lab-persist-outcomes = "afterhours_lab.persist_outcomes:main"
+afterhours-lab-study = "afterhours_lab.study_cli:main"
 afterhours-lab-web = "afterhours_lab.web.app:main"
 afterhours-lab-monitor = "afterhours_lab.monitor:main"
 

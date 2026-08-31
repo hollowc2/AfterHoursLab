@@ -59,7 +59,26 @@ from afterhours_lab.research.filters import (
     REACTION_DIRECTIONS,
     EventFilter,
     FeatureVersions,
+    canonical_filter_json,
+    canonical_filter_record,
+    filter_digest,
     normalize_symbol,
+    refinement_exclusion_reasons,
+)
+from afterhours_lab.research.outcomes import (
+    FollowingSessionOutcome,
+    fetch_following_session_evidence,
+    fetch_following_session_outcomes,
+)
+from afterhours_lab.research.studies import (
+    StudyDetail,
+    StudyMemberRecord,
+    StudyResultRecord,
+    StudyVersionRecord,
+    fetch_study_detail,
+    fetch_study_members,
+    fetch_study_results,
+    fetch_study_version,
 )
 
 __all__ = [
@@ -100,6 +119,21 @@ __all__ = [
     "fetch_quality_issues",
     "fetch_today",
     "normalize_symbol",
+    "canonical_filter_json",
+    "canonical_filter_record",
+    "filter_digest",
+    "refinement_exclusion_reasons",
+    "FollowingSessionOutcome",
+    "StudyDetail",
+    "StudyMemberRecord",
+    "StudyResultRecord",
+    "StudyVersionRecord",
+    "fetch_following_session_evidence",
+    "fetch_following_session_outcomes",
+    "fetch_study_detail",
+    "fetch_study_members",
+    "fetch_study_results",
+    "fetch_study_version",
     "to_csv",
     "to_jsonl",
     "to_pandas",

@@ -670,3 +670,67 @@ permissions".
 
 It uses `copytruncate` rather than `create` so any active cron/container stdout file
 descriptor remains attached to the current pathname while rotation occurs.
+## Phase 5A: following-session outcomes and immutable studies
+
+The auditable research chain is now:
+
+`bar_evidence` → authoritative `earnings_ohlcv_coverage` → versioned reaction feature →
+versioned following-session outcome → preregistered study → development result and frozen rule
+→ one sealed OOS result.
+
+`following-session-v1` uses only the coverage rows named `earnings_regular`,
+`following_premarket`, and `following_regular`, and selects raw bars through each coverage row's
+exact symbol, market date, session, source, gateway receipt timestamp, and expected interval. The
+reference is the last close in authoritative earnings-regular evidence. Premarket first/high/low/
+last and following-regular open/high/low/close are reported as prices and percentage returns from
+that reference. A horizon of N minutes is the close-confirmed minute bar whose start timestamp is
+exactly regular-session open plus N−1 minutes. Missing exact 5-, 30-, or 60-minute bars are never
+replaced with neighbors. These are observations, not entries, exits, fills, P&L, or advice.
+
+Outcome closure reports `not_yet_available` before the following exchange session/capture is
+complete and does not persist that transient state. A documented ten-minute grace after the
+scheduled close covers the authoritative 4:05 PM capture; after that cutoff, missing evidence is
+persisted as `insufficient_data`, with missing fields, phase counts, ratios, quality flags, coverage
+identities, and an exact source-evidence digest. A later authoritative capture produces a distinct
+insert-only evidence generation; it never updates the prior row.
+
+```bash
+uv run afterhours-lab-persist-outcomes --from 2026-08-01 --to 2026-08-31 --dry-run
+uv run afterhours-lab-persist-outcomes --from 2026-08-01 --to 2026-08-31
+
+uv run afterhours-lab-study register --spec studies/delay-retention-example.json --dry-run
+uv run afterhours-lab-study register --spec studies/delay-retention-example.json
+uv run afterhours-lab-study evaluate-development --study delay-retention-example --version 1 --dry-run
+uv run afterhours-lab-study evaluate-development --study delay-retention-example --version 1
+uv run afterhours-lab-study evaluate-oos --study delay-retention-example --version 1 --dry-run
+uv run afterhours-lab-study evaluate-oos --study delay-retention-example --version 1
+uv run afterhours-lab-study show --study delay-retention-example --version 1 --format json
+```
+
+Study specifications are strict JSON. Registration stores an immutable canonical plan and pins the
+feature, detector, classifier, and outcome versions. Development freezes the complete scoped
+universe—including exclusions—and a typed median detection-delay rule. OOS cannot be materialized
+until that rule exists and uses its stored digest unchanged. `paper_trade_candidate` is only a
+conservative research disposition and is blocked unless the declared sample and coverage gates
+pass; it grants no trading authority. Small samples, concentration, regime change, and missing
+authoritative evidence remain disclosed limitations.
+
+Canonical digests use UTF-8 JSON, sorted keys, compact separators, explicit nulls, timezone-aware
+ISO-8601 timestamps, finite numbers, normalized/deduplicated lists where semantics are unordered,
+and a schema name in every digest input. Cohort members are ordered by earnings date and symbol.
+Presentation sorting, limit, and offset are excluded from persisted filter semantics.
+
+Migration `010_phase5_studies` is additive and forward-only. It creates
+`following_session_outcomes`, `study_versions`, `study_results`, and `study_members`, with natural
+keys, checks, foreign keys, and update/delete rejection triggers. Apply with
+`uv run afterhours-lab-migrate`; rollback restores the prior application image while leaving the
+migration and valid insert-only evidence in place. Schema corrections require a new migration.
+
+The proposed `infra/cron/persist_outcomes.cron` runs at 4:25 PM New York time after the 4:05 PM
+authoritative following-regular capture and rescans ten calendar days for weekends, holidays, and
+late captures. It is DST guarded and independent of the 8:25 PM reaction-feature job. Do not
+install it until the explicit Helios deployment gate is approved. The job reads PostgreSQL market
+evidence and writes versioned derived outcomes only; it makes zero gateway calls.
+
+Phase 5B weekly cohort reports, Phase 5C hypothetical alerting/shadow journals, and Phase 5D
+expected-move work remain deferred.

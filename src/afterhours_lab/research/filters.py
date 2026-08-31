@@ -13,6 +13,7 @@ import datetime as dt
 import re
 from typing import Any
 
+from afterhours_lab.canonical import canonical_digest, canonical_json
 from afterhours_lab.reactions import CLASSIFIER_VERSION, DETECTOR_VERSION
 
 FEATURE_VERSION = "earnings-reaction-v1"
@@ -197,9 +198,7 @@ class EventFilter:
                 f"reaction_class = ANY({params.add(list(self.reaction_classes))}::text[])"
             )
         if self.directions:
-            clauses.append(
-                f"reaction_direction = ANY({params.add(list(self.directions))}::text[])"
-            )
+            clauses.append(f"reaction_direction = ANY({params.add(list(self.directions))}::text[])")
         if self.postmarket_collection_modes:
             modes = list(self.postmarket_collection_modes)
             clauses.append(
@@ -232,3 +231,84 @@ class EventFilter:
     @property
     def order_sql(self) -> str:
         return ORDER_BY[self.order_by]
+
+
+_PRESENTATION_FIELDS = {"order_by", "limit", "offset"}
+
+
+def canonical_filter_record(event_filter: EventFilter) -> dict[str, Any]:
+    """Stable study semantics, deliberately excluding presentation state."""
+    record: dict[str, Any] = {}
+    for field in dataclasses.fields(event_filter):
+        if field.name in _PRESENTATION_FIELDS:
+            continue
+        value = getattr(event_filter, field.name)
+        if field.name == "symbols":
+            value = tuple(sorted(set(value)))
+        elif isinstance(value, tuple):
+            value = tuple(sorted(set(value)))
+        record[field.name] = value
+    return record
+
+
+def canonical_filter_json(event_filter: EventFilter) -> str:
+    return canonical_json(canonical_filter_record(event_filter))
+
+
+def filter_digest(event_filter: EventFilter) -> str:
+    return canonical_digest("event-filter-v1", canonical_filter_record(event_filter))
+
+
+def refinement_exclusion_reasons(row: Any, event_filter: EventFilter) -> tuple[str, ...]:
+    """Stable reason codes mirroring ``refinement_sql`` for frozen memberships."""
+    reasons: list[str] = []
+    checks = (
+        (event_filter.analysis_statuses, row.analysis_status, "analysis_status"),
+        (event_filter.reaction_classes, row.reaction_class, "reaction_class"),
+        (event_filter.directions, row.reaction_direction, "reaction_direction"),
+        (
+            event_filter.postmarket_collection_modes,
+            row.earnings_postmarket_collection_mode,
+            "postmarket_collection_mode",
+        ),
+    )
+    for allowed, value, code in checks:
+        if allowed and value not in allowed:
+            reasons.append(f"{code}_excluded")
+    pairs = (
+        (
+            event_filter.min_abs_initial_return,
+            abs(row.initial_return) if row.initial_return is not None else None,
+            "min_abs_initial_return",
+        ),
+        (
+            event_filter.max_abs_initial_return,
+            abs(row.initial_return) if row.initial_return is not None else None,
+            "max_abs_initial_return",
+            "max",
+        ),
+        (event_filter.min_retention, row.retention, "min_retention"),
+        (event_filter.max_retention, row.retention, "max_retention", "max"),
+        (
+            event_filter.min_detection_delay_minutes,
+            row.detection_delay_minutes,
+            "min_detection_delay",
+        ),
+        (
+            event_filter.max_detection_delay_minutes,
+            row.detection_delay_minutes,
+            "max_detection_delay",
+            "max",
+        ),
+        (event_filter.min_volume_105m, row.volume_105m, "min_volume_105m"),
+        (event_filter.min_coverage_ratio, row.study_coverage_ratio, "min_coverage_ratio"),
+        (event_filter.min_eps_surprise_pct, row.eps_surprise_pct, "min_eps_surprise_pct"),
+        (event_filter.max_eps_surprise_pct, row.eps_surprise_pct, "max_eps_surprise_pct", "max"),
+    )
+    for item in pairs:
+        threshold, value, code, *kind = item
+        if threshold is None:
+            continue
+        if value is None or (value > threshold if kind else value < threshold):
+            reasons.append(f"{code}_excluded")
+    return tuple(reasons)

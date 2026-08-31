@@ -1,0 +1,6 @@
+# AfterHoursLab outcome closure — 4:25 PM America/New_York, exchange weekdays.
+# Runs after the authoritative 4:05 PM following_regular capture. The wrapper is the
+# DST/local-time guard; install only after the Phase 5A operator approval gate.
+# Install (only ever touches its own wrapper line):
+#   crontab -l 2>/dev/null | grep -v run_persist_outcomes_cron.sh | cat - infra/cron/persist_outcomes.cron | crontab -
+25 20,21 * * 1-5 cd /opt/afterhours-lab && tools/run_persist_outcomes_cron.sh >> /opt/afterhours-lab/persist_outcomes.log 2>&1
