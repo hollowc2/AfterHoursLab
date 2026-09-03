@@ -189,8 +189,9 @@ async def capture_phase(
                 f"coverage already exists for {symbol} {earnings_date} {phase_name}"
             )
         symbols = [symbol]
-    responses = await asyncio.gather(
-        *(gateway.get_session_history(s, evidence_date, session=phase.session) for s in symbols)
+    responses = await gateway.gather(
+        lambda s=s: gateway.get_session_history(s, evidence_date, session=phase.session)
+        for s in symbols
     )
     for response in responses:
         history = response.session_history

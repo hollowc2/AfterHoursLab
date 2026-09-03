@@ -1,3 +1,4 @@
+import asyncio
 import datetime as dt
 
 import pytest
@@ -9,6 +10,9 @@ class FakeGateway:
     def __init__(self, response) -> None:
         self.response = response
         self.calls: list[tuple] = []
+
+    async def gather(self, factories):
+        return await asyncio.gather(*(factory() for factory in factories))
 
     async def get_session_history(self, symbol, date, *, session):
         self.calls.append((symbol, date, session))

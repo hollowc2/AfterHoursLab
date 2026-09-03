@@ -13,17 +13,27 @@ class AppSettings(BaseSettings):
 
     gateway_url: str = Field(validation_alias="SCHWAB_GATEWAY_URL")
     gateway_api_key: SecretStr = Field(validation_alias="SCHWAB_GATEWAY_API_KEY")
+    # The single Schwab upstream worker serializes our fan-out, so this
+    # background-priority client keeps a low concurrency cap, a generous per-request
+    # timeout (~5 s queue wait + ~3 s execution), and exponential backoff with jitter
+    # on the gateway's "worker is busy" responses (503 queue timeout / 429 capacity).
     gateway_timeout_seconds: float = Field(
-        default=5.0, validation_alias="SCHWAB_GATEWAY_TIMEOUT_SECONDS"
+        default=12.0, validation_alias="SCHWAB_GATEWAY_TIMEOUT_SECONDS"
     )
     gateway_max_concurrency: int = Field(
-        default=4, validation_alias="SCHWAB_GATEWAY_MAX_CONCURRENCY"
+        default=3, validation_alias="SCHWAB_GATEWAY_MAX_CONCURRENCY"
     )
     gateway_max_attempts: int = Field(
-        default=3, validation_alias="SCHWAB_GATEWAY_MAX_ATTEMPTS"
+        default=5, validation_alias="SCHWAB_GATEWAY_MAX_ATTEMPTS"
     )
     gateway_retry_backoff_seconds: float = Field(
         default=0.5, validation_alias="SCHWAB_GATEWAY_RETRY_BACKOFF_SECONDS"
+    )
+    gateway_retry_max_backoff_seconds: float = Field(
+        default=8.0, validation_alias="SCHWAB_GATEWAY_RETRY_MAX_BACKOFF_SECONDS"
+    )
+    gateway_fan_out_stagger_seconds: float = Field(
+        default=0.15, validation_alias="SCHWAB_GATEWAY_FAN_OUT_STAGGER_SECONDS"
     )
 
     @field_validator("gateway_url")
@@ -52,6 +62,22 @@ class AppSettings(BaseSettings):
     def gateway_concurrency_must_be_bounded(cls, value: int) -> int:
         if not 1 <= value <= 32:
             raise ValueError("SCHWAB_GATEWAY_MAX_CONCURRENCY must be between 1 and 32")
+        return value
+
+    @field_validator("gateway_retry_max_backoff_seconds")
+    @classmethod
+    def gateway_max_backoff_must_be_positive(cls, value: float) -> float:
+        if value <= 0:
+            raise ValueError("SCHWAB_GATEWAY_RETRY_MAX_BACKOFF_SECONDS must be positive")
+        return value
+
+    @field_validator("gateway_fan_out_stagger_seconds")
+    @classmethod
+    def gateway_stagger_must_be_nonnegative(cls, value: float) -> float:
+        if value < 0:
+            raise ValueError(
+                "SCHWAB_GATEWAY_FAN_OUT_STAGGER_SECONDS must be nonnegative"
+            )
         return value
 
     @field_validator("gateway_max_attempts")
