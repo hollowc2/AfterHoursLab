@@ -358,7 +358,7 @@ def test_event_page_adds_daily_context_from_gateway(full_conn: FakeConnection) -
     )
     assert daily["data"][0]["type"] == "candlestick"
     assert any(shape["label"]["text"] == "earnings" for shape in daily["layout"]["shapes"])
-    assert gateway.requests == [("TEST", "daily", 365)]
+    assert gateway.requests == [("TEST", "daily", 20)]
 
 
 def test_event_page_is_404_for_an_unknown_event() -> None:
