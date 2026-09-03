@@ -173,7 +173,7 @@ async def test_today_marks_unfinalized_rows_and_lists_degradation_reasons() -> N
                 "gateway_received_at": RECEIVED_AT,
                 "stale": True,
                 "age_seconds": 12.0,
-                "data_quality_flags": ["wide_spread"],
+                "data_quality_flags": ["stale", "wide_spread"],
             }
         ],
         pre_close={},
@@ -193,6 +193,9 @@ async def test_today_marks_unfinalized_rows_and_lists_degradation_reasons() -> N
     assert "gateway reported the quote as stale" in candidate.degradation_reasons
     assert "wide_spread" in candidate.degradation_reasons
     assert "no finalized feature row yet" in candidate.degradation_reasons
+    # the raw "stale" flag is dropped when quote_stale already reported it
+    assert "stale" not in candidate.degradation_reasons
+    assert len(candidate.degradation_reasons) == len(set(candidate.degradation_reasons))
 
 
 async def test_today_without_quote_evidence_says_so() -> None:

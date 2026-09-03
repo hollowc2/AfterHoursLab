@@ -415,7 +415,12 @@ class TodayCandidate:
             reasons.append(f"quote age {self.quote_age_seconds:.0f}s")
         if self.pre_close_reference is None:
             reasons.append("no pre-close reference minute recorded")
-        reasons.extend(self.quote_quality_flags)
+        # ``quote_stale`` already speaks to a "stale" quality flag; keep the rest.
+        reasons.extend(
+            flag
+            for flag in self.quote_quality_flags
+            if not (self.quote_stale and flag == "stale")
+        )
         if not self.finalized:
             reasons.append("no finalized feature row yet")
         return tuple(dict.fromkeys(reasons))
