@@ -73,7 +73,8 @@ TEMPLATES_DIR = PACKAGE_DIR / "templates"
 STATIC_DIR = PACKAGE_DIR / "static"
 
 DEFAULT_EXPLORER_DAYS = 180
-DAILY_HISTORY_DAYS = 365
+# The gateway currently caps daily history at 20 sessions; larger requests 400.
+DAILY_HISTORY_DAYS = 20
 CSV_MAX_ROWS = 5000
 CHART_MAX_ROWS = 2000
 SSE_POLL_SECONDS = 2.0
