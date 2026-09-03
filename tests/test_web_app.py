@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
 import json
+import re
 
 import pytest
 from conftest import (
@@ -15,6 +17,7 @@ from conftest import (
     note_row,
 )
 from fastapi.testclient import TestClient
+from schwab_gateway_sdk.models import HistoryResponseV1
 
 from afterhours_lab import gateway as gateway_module
 from afterhours_lab.web.app import _today_event_stream, create_app
@@ -22,10 +25,49 @@ from afterhours_lab.web.app import _today_event_stream, create_app
 DATE = EARNINGS_DATE.isoformat()
 
 
-def client_for(conn: FakeConnection) -> TestClient:
+class FakeGateway:
+    def __init__(self, response: HistoryResponseV1) -> None:
+        self.response = response
+        self.requests: list[tuple[str, str, int | None]] = []
+
+    async def get_history(
+        self, symbol: str, *, frequency: str = "minute", days_back: int | None = None
+    ) -> HistoryResponseV1:
+        self.requests.append((symbol, frequency, days_back))
+        return self.response
+
+
+def client_for(conn: FakeConnection, gateway=None) -> TestClient:
     return TestClient(
-        create_app(FakePool(conn)),
+        create_app(FakePool(conn), gateway=gateway),
         backend_options={"use_uvloop": True},
+    )
+
+
+def daily_history_response() -> HistoryResponseV1:
+    return HistoryResponseV1.model_validate(
+        {
+            "schema_version": "1.0",
+            "history": {
+                "symbol": "TEST",
+                "frequency": "daily",
+                "bars": [
+                    {
+                        "timestamp": dt.datetime(2026, 8, day, 4, tzinfo=dt.timezone.utc),
+                        "open": 95.0 + day,
+                        "high": 96.0 + day,
+                        "low": 94.0 + day,
+                        "close": 95.5 + day,
+                        "volume": 1_000_000 + day,
+                    }
+                    for day in range(18, 23)
+                ],
+                "gateway_received_at": POSTMARKET_START,
+                "source": "schwab",
+                "stale": False,
+                "data_quality_flags": [],
+            },
+        }
     )
 
 
@@ -299,6 +341,24 @@ def test_event_page_renders_the_chart_and_evidence(full_conn: FakeConnection) ->
     assert "Researcher notes" in body
     assert "fetch_event_detail" in body  # the notebook snippet
     assert "aaaaaaaaaaaa" in body  # the response hash, truncated for display
+
+
+def test_event_page_adds_daily_context_from_gateway(full_conn: FakeConnection) -> None:
+    gateway = FakeGateway(daily_history_response())
+    with client_for(full_conn, gateway) as client:
+        body = client.get(f"/events/TEST/{DATE}").text
+
+    assert "Daily context" in body
+    assert "daily context around earnings" in body
+    figures = [json.loads(value) for value in re.findall(r"data-figure='([^']+)'", body)]
+    daily = next(
+        figure
+        for figure in figures
+        if "daily context around earnings" in figure["layout"]["title"]["text"]
+    )
+    assert daily["data"][0]["type"] == "candlestick"
+    assert any(shape["label"]["text"] == "earnings" for shape in daily["layout"]["shapes"])
+    assert gateway.requests == [("TEST", "daily", 365)]
 
 
 def test_event_page_is_404_for_an_unknown_event() -> None:

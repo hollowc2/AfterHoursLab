@@ -19,6 +19,8 @@ from afterhours_lab.research import EventDetail, EventSummary, PathBar
 EASTERN = ZoneInfo("America/New_York")
 
 REGULAR_TAIL_MINUTES = 30
+DAILY_CONTEXT_BEFORE = 120
+DAILY_CONTEXT_AFTER = 30
 
 UP_COLOR = "#1f9d76"
 DOWN_COLOR = "#d1495b"
@@ -144,6 +146,89 @@ def _price_volume_layout(title: str) -> dict[str, Any]:
             "gridcolor": GRID_COLOR,
             "title": {"text": "Vol"},
         },
+    }
+
+
+def daily_context_figure(
+    symbol: str,
+    earnings_date: dt.date,
+    bars: Sequence[Any],
+    *,
+    reference_price: float | None = None,
+) -> dict[str, Any] | None:
+    """Daily trend context around an event, with the event date kept in view.
+
+    The gateway returns a trailing daily history.  Keep up to 120 sessions before
+    earnings and 30 after it: enough to establish the trend without shrinking the
+    earnings candle into an unreadable point on a years-long axis.
+    """
+    dated = sorted(
+        (
+            (bar.timestamp.astimezone(EASTERN).date(), bar)
+            for bar in bars
+        ),
+        key=lambda item: item[0],
+    )
+    if not dated:
+        return None
+
+    event_index = next(
+        (index for index, (market_date, _bar) in enumerate(dated) if market_date >= earnings_date),
+        len(dated) - 1,
+    )
+    start = max(0, event_index - DAILY_CONTEXT_BEFORE)
+    stop = min(len(dated), event_index + DAILY_CONTEXT_AFTER + 1)
+    window = dated[start:stop]
+    dates = [market_date.isoformat() for market_date, _bar in window]
+    window_bars = [bar for _market_date, bar in window]
+
+    candle_trace = {
+        "type": "candlestick",
+        "name": "Daily",
+        "x": dates,
+        "open": [bar.open for bar in window_bars],
+        "high": [bar.high for bar in window_bars],
+        "low": [bar.low for bar in window_bars],
+        "close": [bar.close for bar in window_bars],
+        "increasing": {"line": {"color": UP_COLOR}, "fillcolor": UP_COLOR},
+        "decreasing": {"line": {"color": DOWN_COLOR}, "fillcolor": DOWN_COLOR},
+        "xaxis": "x",
+        "yaxis": "y",
+    }
+    volume_trace = {
+        "type": "bar",
+        "name": "Volume",
+        "x": dates,
+        "y": [bar.volume for bar in window_bars],
+        "marker": {
+            "color": [
+                UP_COLOR if bar.close >= bar.open else DOWN_COLOR for bar in window_bars
+            ],
+            "opacity": 0.45,
+        },
+        "xaxis": "x",
+        "yaxis": "y2",
+        "showlegend": False,
+        "hovertemplate": "%{y:,} shares<extra></extra>",
+    }
+
+    layout = _price_volume_layout(f"{symbol} — daily context around earnings")
+    layout["xaxis"].update(
+        {
+            "title": {"text": "Daily bars"},
+            "rangebreaks": [{"bounds": ["sat", "mon"]}],
+        }
+    )
+    shapes = [_vline(earnings_date.isoformat(), SIGNAL_COLOR, "solid", "earnings")]
+    if reference_price is not None:
+        shapes.append(
+            _hline(reference_price, REFERENCE_COLOR, "dot", "earnings-day pre-close")
+        )
+    layout["shapes"] = shapes
+    return {
+        "data": [candle_trace, volume_trace],
+        "layout": layout,
+        "config": CHART_CONFIG,
     }
 
 
