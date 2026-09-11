@@ -20,6 +20,7 @@ from zoneinfo import ZoneInfo
 
 from afterhours_lab.reactions import HORIZONS_MINUTES, REACTION_THRESHOLD_PCT
 from afterhours_lab.research.filters import EventFilter, ParamBuilder, normalize_symbol
+from afterhours_lab.trading_calendar import regular_session_bounds
 
 EASTERN = ZoneInfo("America/New_York")
 
@@ -35,6 +36,11 @@ PHASES = (
 STUDY_PHASES = ("earnings_regular", "earnings_postmarket")
 
 STUDY_WINDOW_MINUTES = max(HORIZONS_MINUTES)
+
+# Scheduled captures start five minutes after the source phase closes. Give the
+# writer another five minutes to finish before absence becomes an operational
+# defect; before then, the phase is pending rather than missing.
+CAPTURE_DEADLINE_GRACE = dt.timedelta(minutes=10)
 
 
 def _as_list(value: Any) -> list[str]:
@@ -189,6 +195,31 @@ class EventSummary:
             covered_phases=tuple(_as_list(row["covered_phases"])),
             note_count=row["note_count"] or 0,
         )
+
+
+def _study_phase_capture_deadline(
+    earnings_date: dt.date, phase: str
+) -> dt.datetime:
+    if phase == "earnings_regular":
+        _, phase_end = regular_session_bounds(earnings_date)
+    elif phase == "earnings_postmarket":
+        phase_end = dt.datetime.combine(earnings_date, dt.time(20), EASTERN)
+    else:  # pragma: no cover - private helper is called only for STUDY_PHASES
+        raise ValueError(f"unsupported study phase: {phase}")
+    return phase_end + CAPTURE_DEADLINE_GRACE
+
+
+def _overdue_missing_study_phases(
+    summary: EventSummary, now: dt.datetime
+) -> tuple[str, ...]:
+    if now.tzinfo is None or now.utcoffset() is None:
+        raise ValueError("quality issue evaluation requires a timezone-aware current time")
+    return tuple(
+        phase
+        for phase in STUDY_PHASES
+        if phase not in summary.covered_phases
+        and now >= _study_phase_capture_deadline(summary.earnings_date, phase)
+    )
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1112,6 +1143,7 @@ async def fetch_quality_issues(
     event_filter: EventFilter | None = None,
     *,
     limit: int = 500,
+    now: dt.datetime | None = None,
 ) -> tuple[QualityIssue, ...]:
     """Events that are not research-grade, and the specific reason for each.
 
@@ -1136,26 +1168,34 @@ async def fetch_quality_issues(
     """
     rows = await conn.fetch(sql, *params.params)
 
+    evaluated_at = now or dt.datetime.now(EASTERN)
     issues: list[QualityIssue] = []
     for row in rows:
         summary = EventSummary.from_row(row)
         missing_study_phases = tuple(
             phase for phase in STUDY_PHASES if phase not in summary.covered_phases
         )
-        if missing_study_phases:
+        overdue_missing_phases = _overdue_missing_study_phases(summary, evaluated_at)
+        if overdue_missing_phases:
             issues.append(
                 QualityIssue(
                     symbol=summary.symbol,
                     earnings_date=summary.earnings_date,
                     kind="missing_capture_phase",
                     detail=(
-                        "study phase(s) never captured: " + ", ".join(missing_study_phases)
+                        "study phase(s) missed their capture deadline: "
+                        + ", ".join(overdue_missing_phases)
                     ),
-                    phases_missing=missing_study_phases,
+                    phases_missing=overdue_missing_phases,
                     observed_minutes=None,
                     expected_minutes=None,
                 )
             )
+            continue
+        if missing_study_phases:
+            # A future event or an in-progress session is not a quality failure.
+            # Suppress the downstream "not_analyzed" label until both study
+            # phases have actually reached their capture deadlines.
             continue
         if not summary.analyzed:
             issues.append(

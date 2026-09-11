@@ -611,7 +611,7 @@ The OHLCV wrapper performs bounded point-in-time reads after each phase is avail
 
 | Entry | ET time | What it does |
 | --- | --- | --- |
-| `archive_earnings` | 8:30 AM | Refreshes `earnings_events` and `watchlist.json` |
+| `archive_earnings` | 8:30 AM, 3:55 PM, 7:55 PM | Refreshes `earnings_events` and `watchlist.json`; the later passes catch same-day calendar additions before capture |
 | `capture_ohlcv` | 9:35 AM | Prior event's following-day premarket |
 | `capture_ohlcv` | 4:05 PM | Today's regular + prior event's following regular |
 | `capture_ohlcv` | 8:05 PM | Today's complete postmarket |
@@ -623,9 +623,10 @@ takes its own advisory lock, so the overlap with a slow 8:05 PM run is harmless.
 
 **`archive_earnings` is the producer the other three read** — `capture_ohlcv.py` picks its
 symbols out of `earnings_events`, so a day this doesn't run is a day nothing gets
-captured. It goes at 8:30 AM ET to sit between the two things it serves: late enough
-that the previous evening's after-close prints have published actuals, and before the
-9:30 AM regular-session open for today's after-close names.
+captured. The 8:30 AM ET pass establishes the day's universe and picks up prior-evening
+actuals. Lightweight 3:55 PM and 7:55 PM refreshes close the race where the upstream
+calendar adds a same-day reporter after the morning archive but before its regular or
+postmarket capture.
 
 All five are timing-sensitive enough that a plain single-UTC-slot cron line isn't good
 enough across a DST transition — each one follows Butterflyguy's

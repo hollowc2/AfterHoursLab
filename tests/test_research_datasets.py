@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+from zoneinfo import ZoneInfo
 
 import pytest
 from conftest import (
@@ -30,6 +31,8 @@ from afterhours_lab.research import (
     to_records,
 )
 from afterhours_lab.research.datasets import CoveragePhase, _provisional_path
+
+EASTERN = ZoneInfo("America/New_York")
 
 
 def test_summary_reports_missing_phases_and_study_readiness() -> None:
@@ -245,7 +248,11 @@ async def test_quality_issues_name_the_specific_defect() -> None:
             event_row(symbol="GOOD"),
         ]
     )
-    issues = await fetch_quality_issues(conn, EventFilter())
+    issues = await fetch_quality_issues(
+        conn,
+        EventFilter(),
+        now=dt.datetime(2026, 8, 21, 12, tzinfo=EASTERN),
+    )
     by_symbol = {issue.symbol: issue for issue in issues}
 
     assert by_symbol["MISS"].kind == "missing_capture_phase"
@@ -254,6 +261,35 @@ async def test_quality_issues_name_the_specific_defect() -> None:
     assert by_symbol["BACK"].kind == "historical_backfill"
     assert by_symbol["FLAG"].kind == "data_quality_flag"
     assert "GOOD" not in by_symbol
+
+
+async def test_quality_issues_do_not_call_pending_capture_phases_missing() -> None:
+    conn = FakeConnection(
+        events=[event_row(symbol="PENDING", covered_phases=[], analysis_status=None)]
+    )
+
+    before_close = await fetch_quality_issues(
+        conn,
+        EventFilter(),
+        now=dt.datetime(2026, 8, 20, 15, 59, tzinfo=EASTERN),
+    )
+    after_regular_deadline = await fetch_quality_issues(
+        conn,
+        EventFilter(),
+        now=dt.datetime(2026, 8, 20, 16, 11, tzinfo=EASTERN),
+    )
+    after_postmarket_deadline = await fetch_quality_issues(
+        conn,
+        EventFilter(),
+        now=dt.datetime(2026, 8, 20, 20, 11, tzinfo=EASTERN),
+    )
+
+    assert before_close == ()
+    assert after_regular_deadline[0].phases_missing == ("earnings_regular",)
+    assert after_postmarket_deadline[0].phases_missing == (
+        "earnings_regular",
+        "earnings_postmarket",
+    )
 
 
 async def test_class_distribution_groups_unanalyzed_events() -> None:
