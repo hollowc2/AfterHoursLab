@@ -304,6 +304,25 @@ def test_explorer_discloses_included_and_excluded_counts(full_conn: FakeConnecti
     assert "immediate_continuation" in body
 
 
+def test_explorer_shows_incomplete_analysis_reason() -> None:
+    conn = FakeConnection(
+        events=[
+            event_row(
+                analysis_status="insufficient_data",
+                analysis_status_reason="missing exact checkpoint bar(s): 5,105m",
+                reaction_class=None,
+                study_observed_minutes=28,
+                study_coverage_ratio=28 / 105,
+            )
+        ]
+    )
+    with client_for(conn) as client:
+        body = client.get("/events").text
+
+    assert "missing exact checkpoint bar(s): 5,105m" in body
+    assert "28/105" in body
+
+
 def test_explorer_rejects_an_unknown_filter_value(full_conn: FakeConnection) -> None:
     with client_for(full_conn) as client:
         response = client.get("/events?class=moon_shot")

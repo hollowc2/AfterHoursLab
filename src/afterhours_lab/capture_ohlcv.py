@@ -189,6 +189,21 @@ async def capture_phase(
                 f"coverage already exists for {symbol} {earnings_date} {phase_name}"
             )
         symbols = [symbol]
+    elif symbols:
+        # A later scheduled run is deliberately allowed to fill a phase that was
+        # absent when the earnings calendar was refreshed.  Do not refetch existing
+        # evidence: raw captures are immutable and a catch-up should only target the
+        # missing symbols.
+        existing_rows = await conn.fetch(
+            """
+            SELECT symbol FROM earnings_ohlcv_coverage
+            WHERE earnings_date=$1 AND phase=$2
+            """,
+            earnings_date,
+            phase_name,
+        )
+        existing = {row["symbol"] for row in existing_rows}
+        symbols = [candidate for candidate in symbols if candidate not in existing]
     responses = await gateway.gather(
         lambda s=s: gateway.get_session_history(s, evidence_date, session=phase.session)
         for s in symbols
