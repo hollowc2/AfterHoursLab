@@ -4,11 +4,7 @@
 
 # AfterHoursLab
 
-A read-only research lab for after-hours earnings reactions. It has no Schwab
-credentials of its own — all market data comes from the internal
-[SchwabGateway](https://github.com/hollowc2/SchwabGateway) HTTP API, authenticated
-with a pre-issued API key. There is no order, account, position, or streaming code
-here, and none is planned.
+A read-only research lab for after-hours earnings reactions.
 
 The auditable chain: raw gateway evidence → authoritative OHLCV coverage →
 versioned reaction features → versioned following-session outcomes →
