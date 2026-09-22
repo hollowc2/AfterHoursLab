@@ -68,6 +68,13 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .pos { color: var(--up); }
 .neg { color: var(--down); }
 .muted { color: var(--muted); }
+.table-note {
+  max-width: 26rem;
+  margin-top: 0.2rem;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.25;
+}
 
 .tag {
   display: inline-block;

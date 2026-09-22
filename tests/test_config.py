@@ -31,10 +31,12 @@ def test_settings_load_when_both_present(monkeypatch: pytest.MonkeyPatch) -> Non
     settings = AppSettings()
     assert settings.gateway_url == "https://gateway.internal"
     assert settings.gateway_api_key.get_secret_value() == "test-key"
-    assert settings.gateway_timeout_seconds == 5.0
-    assert settings.gateway_max_concurrency == 4
-    assert settings.gateway_max_attempts == 3
+    assert settings.gateway_timeout_seconds == 12.0
+    assert settings.gateway_max_concurrency == 3
+    assert settings.gateway_max_attempts == 5
     assert settings.gateway_retry_backoff_seconds == 0.5
+    assert settings.gateway_retry_max_backoff_seconds == 8.0
+    assert settings.gateway_fan_out_stagger_seconds == 0.15
 
 
 @pytest.mark.parametrize(

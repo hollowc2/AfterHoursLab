@@ -49,7 +49,12 @@
             {% if row.reaction_class %}
               <span class="tag {{ row.reaction_class }}">{{ row.reaction_class }}</span>
             {% else %}
-              <span class="tag">{{ row.analysis_status or 'not analyzed' }}</span>
+              <span class="tag" title="{{ row.analysis_status_reason or 'No persisted analysis result' }}">
+                {{ row.analysis_status or 'not analyzed' }}
+              </span>
+              {% if row.analysis_status_reason %}
+                <div class="table-note">{{ row.analysis_status_reason }}</div>
+              {% endif %}
             {% endif %}
           </td>
           <td>{{ row.reaction_direction or '—' }}</td>
@@ -78,8 +83,14 @@
           <td>
             {% if row.data_quality_flags %}
               <span class="tag bad" title="{{ row.data_quality_flags | join('; ') }}">{{ row.data_quality_flags | length }} flag(s)</span>
+              {% if row.analysis_status_reason %}
+                <div class="table-note">{{ row.analysis_status_reason }}</div>
+              {% endif %}
             {% elif row.missing_phases %}
               <span class="tag provisional" title="{{ row.missing_phases | join('; ') }}">{{ row.missing_phases | length }} phase(s) missing</span>
+              {% if row.analysis_status_reason %}
+                <div class="table-note">{{ row.analysis_status_reason }}</div>
+              {% endif %}
             {% else %}<span class="tag final">clean</span>{% endif %}
           </td>
         </tr>

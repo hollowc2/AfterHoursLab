@@ -1,3 +1,4 @@
+import asyncio
 import datetime as dt
 
 import pytest
@@ -41,11 +42,19 @@ def response(symbol: str, date: dt.date, session: str) -> SessionHistoryResponse
 
 
 class FakeConnection:
-    def __init__(self, *, coverage_exists: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        coverage_exists: bool = False,
+        existing_symbols: list[str] | None = None,
+    ) -> None:
         self.executed: list[tuple] = []
         self.coverage_exists = coverage_exists
+        self.existing_symbols = existing_symbols or []
 
-    async def fetch(self, _sql, *_args):
+    async def fetch(self, sql, *_args):
+        if "FROM earnings_ohlcv_coverage" in sql:
+            return [{"symbol": symbol} for symbol in self.existing_symbols]
         return [{"symbol": "AAPL"}]
 
     async def execute(self, sql, *args):
@@ -59,6 +68,9 @@ class FakeGateway:
     def __init__(self, item) -> None:
         self.item = item
         self.calls: list[tuple] = []
+
+    async def gather(self, factories):
+        return await asyncio.gather(*(factory() for factory in factories))
 
     async def get_session_history(self, symbol, date, *, session):
         self.calls.append((symbol, date, session))
@@ -120,6 +132,25 @@ async def test_postmarket_coverage_filters_out_premarket_and_regular(monkeypatch
     assert args[10] == 240
     assert args[7] == dt.datetime(2026, 8, 26, 21, tzinfo=UTC)
     assert args[17] == "scheduled_capture"
+
+
+async def test_scheduled_capture_only_fetches_symbols_without_existing_coverage(
+    monkeypatch,
+) -> None:
+    item = response("AAPL", dt.date(2026, 8, 26), "extended")
+    conn = FakeConnection(existing_symbols=["AAPL"])
+    gateway = FakeGateway(item)
+
+    async def fake_preserve(_conn, _value, **_kwargs):
+        return None
+
+    monkeypatch.setattr(capture_ohlcv, "preserve_session_history", fake_preserve)
+    count = await capture_ohlcv.capture_phase(
+        gateway, conn, "earnings_postmarket", dt.date(2026, 8, 26)
+    )
+
+    assert count == 0
+    assert gateway.calls == []
 
 
 async def test_premarket_phase_links_market_date_to_prior_earnings_date(monkeypatch) -> None:

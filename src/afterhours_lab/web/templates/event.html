@@ -37,6 +37,15 @@
   <div class="chart tall" data-figure='{{ figure | tojson }}'></div>
 </div>
 
+<h2>Daily context</h2>
+{% if daily_figure %}
+<div class="panel">
+  <div class="chart tall" data-figure='{{ daily_figure | tojson }}'></div>
+</div>
+{% else %}
+<div class="disclosure">{{ daily_context_message }}</div>
+{% endif %}
+
 {% if following_figure %}
 <div class="panel">
   <div class="chart" data-figure='{{ following_figure | tojson }}'></div>

@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
-from collections.abc import Awaitable, Callable, Sequence
+import random
+from collections.abc import Awaitable, Callable, Iterable, Sequence
 from typing import TypeVar
 
 import httpx
@@ -42,11 +43,27 @@ class BoundedGatewayClient:
         max_concurrency: int,
         max_attempts: int,
         backoff_seconds: float,
+        max_backoff_seconds: float = 8.0,
+        stagger_seconds: float = 0.0,
     ) -> None:
         self._client = client
         self._semaphore = asyncio.Semaphore(max_concurrency)
         self._max_attempts = max_attempts
         self._backoff_seconds = backoff_seconds
+        self._max_backoff_seconds = max_backoff_seconds
+        self._stagger_seconds = stagger_seconds
+
+    def _backoff_delay(self, attempt: int) -> float:
+        """Exponential backoff capped at the ceiling, with full jitter.
+
+        The gateway sheds background work when its shared worker is busy; a
+        synchronized retry storm just prolongs the saturation, so each client
+        waits a random slice of the growing window instead.
+        """
+        ceiling = min(
+            self._backoff_seconds * (2 ** (attempt - 1)), self._max_backoff_seconds
+        )
+        return random.uniform(0, ceiling)
 
     async def _request(self, operation: Callable[[], Awaitable[_T]]) -> _T:
         for attempt in range(1, self._max_attempts + 1):
@@ -56,8 +73,25 @@ class BoundedGatewayClient:
             except _TRANSIENT_ERRORS:
                 if attempt == self._max_attempts:
                     raise
-                await asyncio.sleep(self._backoff_seconds * (2 ** (attempt - 1)))
+                await asyncio.sleep(self._backoff_delay(attempt))
         raise AssertionError("retry loop exhausted")
+
+    async def gather(self, factories: Iterable[Callable[[], Awaitable[_T]]]) -> list[_T]:
+        """Run a fan-out of requests, staggering submission so a scheduler tick
+        does not fire a perfectly synchronized burst at the single upstream worker.
+
+        Concurrency is still bounded by the shared semaphore; the stagger only
+        smooths the leading edge.
+        """
+
+        async def _run(index: int, factory: Callable[[], Awaitable[_T]]) -> _T:
+            if self._stagger_seconds:
+                await asyncio.sleep(index * self._stagger_seconds)
+            return await factory()
+
+        return await asyncio.gather(
+            *(_run(i, factory) for i, factory in enumerate(factories))
+        )
 
     async def get_quotes(self, symbols: Sequence[str]) -> QuoteResponseV1:
         return await self._request(lambda: self._client.get_quotes(symbols))
@@ -107,4 +141,6 @@ def build_gateway_client(
         max_concurrency=settings.gateway_max_concurrency,
         max_attempts=settings.gateway_max_attempts,
         backoff_seconds=settings.gateway_retry_backoff_seconds,
+        max_backoff_seconds=settings.gateway_retry_max_backoff_seconds,
+        stagger_seconds=settings.gateway_fan_out_stagger_seconds,
     )

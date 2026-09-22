@@ -33,8 +33,10 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.datastructures import QueryParams
 
+from afterhours_lab.config import AppSettings
 from afterhours_lab.db.config import DatabaseSettings
 from afterhours_lab.db.connection import DatabasePool
+from afterhours_lab.gateway import BoundedGatewayClient, build_gateway_client
 from afterhours_lab.reactions import REACTION_THRESHOLD_PCT
 from afterhours_lab.research import (
     ANALYSIS_STATUSES,
@@ -71,6 +73,10 @@ TEMPLATES_DIR = PACKAGE_DIR / "templates"
 STATIC_DIR = PACKAGE_DIR / "static"
 
 DEFAULT_EXPLORER_DAYS = 180
+# The gateway serves up to 250 daily sessions (roughly one trading year). Request the
+# full window so the chart can retain six months of pre-earnings context even when the
+# event is several weeks in the past.
+DAILY_HISTORY_DAYS = 250
 CSV_MAX_ROWS = 5000
 CHART_MAX_ROWS = 2000
 SSE_POLL_SECONDS = 2.0
@@ -194,20 +200,27 @@ def build_templates() -> Jinja2Templates:
     return templates
 
 
-def create_app(pool: DatabasePool | None = None) -> FastAPI:
-    """Build the app. Passing ``pool`` skips startup connection, which tests use."""
+def create_app(
+    pool: DatabasePool | None = None,
+    gateway: BoundedGatewayClient | None = None,
+) -> FastAPI:
+    """Build the app. Passing ``pool`` skips external startup, which tests use."""
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if pool is not None:
             app.state.pool = pool
+            app.state.gateway = gateway
             yield
             return
         connected = await DatabasePool.connect(DatabaseSettings())
+        connected_gateway = build_gateway_client(AppSettings())
         app.state.pool = connected
+        app.state.gateway = connected_gateway
         try:
             yield
         finally:
+            await connected_gateway.close()
             await connected.close()
 
     app = FastAPI(
@@ -216,6 +229,7 @@ def create_app(pool: DatabasePool | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.pool = pool
+    app.state.gateway = gateway
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
     templates = build_templates()
     app.state.templates = templates
@@ -406,6 +420,33 @@ def create_app(pool: DatabasePool | None = None) -> FastAPI:
         request: Request, symbol: str, earnings_date: str
     ) -> HTMLResponse:
         detail = await load_detail(request, symbol, earnings_date)
+        daily_figure = None
+        daily_context_message = None
+        if request.app.state.gateway is None:
+            daily_context_message = "Daily history is unavailable in this environment."
+        else:
+            try:
+                daily_history = await request.app.state.gateway.get_history(
+                    detail.summary.symbol,
+                    frequency="daily",
+                    days_back=DAILY_HISTORY_DAYS,
+                )
+                history = daily_history.history
+                if history.symbol != detail.summary.symbol or history.frequency != "daily":
+                    daily_context_message = "Daily history returned an unexpected identity."
+                else:
+                    daily_figure = charts.daily_context_figure(
+                        detail.summary.symbol,
+                        detail.summary.earnings_date,
+                        history.bars,
+                        reference_price=detail.summary.reference_price,
+                    )
+                    if daily_figure is None:
+                        daily_context_message = "No daily bars were returned for this symbol."
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                daily_context_message = "Daily history is temporarily unavailable."
         return render(
             request,
             "event.html",
@@ -414,6 +455,8 @@ def create_app(pool: DatabasePool | None = None) -> FastAPI:
                 "detail": detail,
                 "summary": detail.summary,
                 "figure": charts.event_figure(detail),
+                "daily_figure": daily_figure,
+                "daily_context_message": daily_context_message,
                 "following_figure": charts.following_day_figure(detail),
                 "notebook_snippet": _notebook_snippet(
                     detail.summary.symbol, detail.summary.earnings_date

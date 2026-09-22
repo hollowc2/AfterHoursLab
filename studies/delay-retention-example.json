@@ -1,0 +1,34 @@
+{
+  "schema_version": "afterhours-study-spec-v1",
+  "study_key": "delay-retention-example",
+  "version": 1,
+  "title": "Detection delay and following-session close return",
+  "hypothesis": "Events with earlier close-confirmed reactions have higher following-session close returns than events with later reactions.",
+  "owner": "AfterHoursLab research",
+  "created_at": "2026-08-30T12:00:00-07:00",
+  "filter": {
+    "date_from": "2024-01-01",
+    "date_to": "2026-06-30",
+    "analysis_statuses": ["complete"],
+    "min_coverage_ratio": 1.0
+  },
+  "versions": {
+    "feature": "earnings-reaction-v1",
+    "detector": "fixed-preclose-2pct-v1",
+    "classifier": "path-retention-v1",
+    "outcome": "following-session-v1"
+  },
+  "development": {"from": "2024-01-01", "to": "2025-12-31"},
+  "oos": {"from": "2026-01-01", "to": "2026-06-30"},
+  "primary_metric": "following_session_close_return",
+  "expected_direction": "higher",
+  "analysis": {
+    "name": "detection_delay_split_following_close_return-v1",
+    "description": "Freeze the median development detection delay, then compare mean following-session close return for delays at or below that threshold against later delays without refitting on OOS."
+  },
+  "minimum_samples": {"development": 30, "oos": 15},
+  "execution_assumptions": "none",
+  "assumptions": ["The analysis is observational and does not model fills or trading costs."],
+  "known_limitations": ["Small or concentrated earnings cohorts can make group means unstable."],
+  "failure_modes": ["Missing authoritative following-session coverage can leave the sample gate unmet."]
+}

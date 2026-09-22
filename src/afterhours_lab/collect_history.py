@@ -52,20 +52,20 @@ async def collect(
     days_back: int | None,
 ) -> int:
     if date is not None:
-        responses = await asyncio.gather(
-            *(
-                gateway.get_session_history(symbol, date, session="extended")
-                for symbol in symbols
+        responses = await gateway.gather(
+            lambda symbol=symbol: gateway.get_session_history(
+                symbol, date, session="extended"
             )
+            for symbol in symbols
         )
         for response in responses:
             await preserve_session_history(conn, response)
     else:
-        responses = await asyncio.gather(
-            *(
-                gateway.get_history(symbol, frequency="minute", days_back=days_back)
-                for symbol in symbols
+        responses = await gateway.gather(
+            lambda symbol=symbol: gateway.get_history(
+                symbol, frequency="minute", days_back=days_back
             )
+            for symbol in symbols
         )
         for response in responses:
             await preserve_minute_history(conn, response)

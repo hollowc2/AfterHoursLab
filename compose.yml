@@ -6,9 +6,9 @@ services:
     image: afterhours-lab:latest
     env_file: .env
     environment:
-      # Keep the secret-bearing .env untouched while routing this app to the
-      # loopback-only candidate through its existing monitoring_net alias.
-      SCHWAB_GATEWAY_URL: http://schwab-gateway-candidate:8012
+      # Keep the secret-bearing .env untouched while routing through the gateway's
+      # stable monitoring_net alias. The gateway container itself is managed elsewhere.
+      SCHWAB_GATEWAY_URL: http://schwab-gateway:8011
     volumes:
       - "./data:/app/data"
     networks:
@@ -30,7 +30,7 @@ services:
     image: afterhours-lab:latest
     env_file: .env
     environment:
-      SCHWAB_GATEWAY_URL: http://schwab-gateway-candidate:8012
+      SCHWAB_GATEWAY_URL: http://schwab-gateway:8011
     command: ["afterhours-lab-web", "--host", "0.0.0.0", "--port", "8055"]
     ports:
       - "127.0.0.1:8055:8055"
@@ -50,7 +50,7 @@ services:
     image: afterhours-lab:latest
     env_file: .env
     environment:
-      SCHWAB_GATEWAY_URL: http://schwab-gateway-candidate:8012
+      SCHWAB_GATEWAY_URL: http://schwab-gateway:8011
     command: ["afterhours-lab-monitor"]
     networks:
       monitoring_net:
