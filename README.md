@@ -40,6 +40,12 @@ uv run ruff check .
 Every persistence step is insert-only and versioned — reruns never overwrite prior
 evidence or results, and definition changes ship as a new version rather than an edit.
 
+`archive-earnings` drops candidates whose trailing 10-session average daily dollar
+volume is under `MIN_AVG_DOLLAR_VOLUME` ($20M) before they ever reach
+`earnings_events` or the watchlist — thinly-traded names never get captured,
+monitored, or counted in `/quality`. A symbol is kept, not dropped, if its liquidity
+check itself fails (see `archive_earnings.py`).
+
 ## Database
 
 Postgres/TimescaleDB, migrated with `afterhours-lab-migrate` (forward-only, no

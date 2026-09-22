@@ -2,6 +2,7 @@ import datetime as dt
 import json
 
 import pytest
+from schwab_gateway_sdk.models import HistoryResponseV1
 
 from afterhours_lab import archive_earnings
 from afterhours_lab.earnings import EarningsCalendarError, EarningsEntry
@@ -9,6 +10,66 @@ from afterhours_lab.status import status_path_for
 from afterhours_lab.watchlist import load_watchlist, read_watchlist
 
 TODAY = dt.date(2026, 8, 19)  # Wednesday
+UTC = dt.timezone.utc
+
+# Well above MIN_AVG_DOLLAR_VOLUME, so a FakeGateway with no override is liquid by
+# default and every pre-existing test (written before the liquidity filter existed)
+# keeps matching its symbols through unchanged.
+LIQUID_AVG_DOLLAR_VOLUME = 100_000_000.0
+
+
+def daily_history(symbol: str, *, avg_dollar_volume: float) -> HistoryResponseV1:
+    close = 100.0
+    volume = int(avg_dollar_volume / close)
+    bar = {
+        "timestamp": dt.datetime(2026, 8, 18, 20, tzinfo=UTC),
+        "open": close,
+        "high": close,
+        "low": close,
+        "close": close,
+        "volume": volume,
+    }
+    return HistoryResponseV1.model_validate(
+        {
+            "schema_version": "1.0",
+            "history": {
+                "symbol": symbol,
+                "frequency": "daily",
+                "bars": [bar] * archive_earnings.LIQUIDITY_LOOKBACK_DAYS,
+                "gateway_received_at": dt.datetime(2026, 8, 19, tzinfo=UTC),
+                "source": "schwab",
+                "stale": False,
+                "age_seconds": 0,
+                "data_quality_flags": [],
+            },
+        }
+    )
+
+
+class FakeGateway:
+    """Every symbol is liquid unless named in `avg_dollar_volume_by_symbol` or
+    `error_symbols`."""
+
+    def __init__(self, avg_dollar_volume_by_symbol=None, *, error_symbols=()):
+        self._avg = avg_dollar_volume_by_symbol or {}
+        self._error_symbols = set(error_symbols)
+        self.requested_symbols: list[str] = []
+
+    async def get_history(self, symbol, *, frequency="daily", days_back=None):
+        self.requested_symbols.append(symbol)
+        if symbol in self._error_symbols:
+            raise RuntimeError("gateway unavailable")
+        avg_dollar_volume = self._avg.get(symbol, LIQUID_AVG_DOLLAR_VOLUME)
+        return daily_history(symbol, avg_dollar_volume=avg_dollar_volume)
+
+    async def close(self) -> None:
+        return None
+
+    async def __aenter__(self) -> "FakeGateway":
+        return self
+
+    async def __aexit__(self, *_args) -> None:
+        return None
 
 
 class FakeEarningsClient:
@@ -175,7 +236,13 @@ def make_fake_pool_class(store: dict, *, lock_available: bool = True):
 
 
 def patch_common(
-    monkeypatch, *, entries_result=None, error=None, store=None, lock_available=True
+    monkeypatch,
+    *,
+    entries_result=None,
+    error=None,
+    store=None,
+    lock_available=True,
+    gateway=None,
 ):
     store = store if store is not None else {}
     fake_client = FakeEarningsClient(entries_result, error)
@@ -184,7 +251,76 @@ def patch_common(
     monkeypatch.setattr(archive_earnings, "DatabaseSettings", lambda: object())
     fake_pool_class = make_fake_pool_class(store, lock_available=lock_available)
     monkeypatch.setattr(archive_earnings, "DatabasePool", fake_pool_class)
+    fake_gateway = gateway if gateway is not None else FakeGateway()
+    monkeypatch.setattr(archive_earnings, "AppSettings", lambda: object())
+    monkeypatch.setattr(archive_earnings, "build_gateway_client", lambda settings: fake_gateway)
     return store, fake_pool_class
+
+
+async def test_liquidity_filter_drops_thin_symbols() -> None:
+    gateway = FakeGateway({"THIN": 1_000_000.0, "LIQUID": 50_000_000.0})
+    kept, dropped = await archive_earnings._filter_by_liquidity(
+        gateway, entries(("THIN", "amc"), ("LIQUID", "amc"))
+    )
+
+    assert [entry.symbol for entry in kept] == ["LIQUID"]
+    assert dropped == ["THIN"]
+
+
+async def test_liquidity_filter_keeps_symbol_on_gateway_error() -> None:
+    gateway = FakeGateway(error_symbols=["FLAKY"])
+    kept, dropped = await archive_earnings._filter_by_liquidity(
+        gateway, entries(("FLAKY", "amc"))
+    )
+
+    assert [entry.symbol for entry in kept] == ["FLAKY"]
+    assert dropped == []
+
+
+async def test_liquidity_filter_keeps_symbol_with_no_bars() -> None:
+    class EmptyHistoryGateway:
+        async def get_history(self, symbol, *, frequency="daily", days_back=None):
+            return HistoryResponseV1.model_validate(
+                {
+                    "schema_version": "1.0",
+                    "history": {
+                        "symbol": symbol,
+                        "frequency": "daily",
+                        "bars": [],
+                        "gateway_received_at": dt.datetime(2026, 8, 19, tzinfo=UTC),
+                        "source": "schwab",
+                        "stale": False,
+                        "age_seconds": 0,
+                        "data_quality_flags": [],
+                    },
+                }
+            )
+
+    kept, dropped = await archive_earnings._filter_by_liquidity(
+        EmptyHistoryGateway(), entries(("NEW", "amc"))
+    )
+
+    assert [entry.symbol for entry in kept] == ["NEW"]
+    assert dropped == []
+
+
+async def test_main_drops_thin_symbol_before_archiving(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    watchlist_path = tmp_path / "watchlist.json"
+    gateway = FakeGateway({"THIN": 1_000_000.0})
+    store, _ = patch_common(
+        monkeypatch,
+        entries_result=entries(("THIN", "amc"), ("LIQUID", "amc")),
+        gateway=gateway,
+    )
+
+    exit_code = await archive_earnings._main(["--watchlist", str(watchlist_path)], today=TODAY)
+
+    assert exit_code == 0
+    assert load_watchlist(watchlist_path) == ["LIQUID"]
+    assert ("THIN", TODAY) not in store
+    assert ("LIQUID", TODAY) in store
 
 
 async def test_main_archives_after_close_symbols_into_watchlist(

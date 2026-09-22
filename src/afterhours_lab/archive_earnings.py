@@ -12,6 +12,7 @@ from pathlib import Path
 import structlog
 
 from afterhours_lab import notify
+from afterhours_lab.config import AppSettings
 from afterhours_lab.db.advisory_lock import try_advisory_lock
 from afterhours_lab.db.config import DatabaseSettings
 from afterhours_lab.db.connection import DatabasePool
@@ -22,6 +23,7 @@ from afterhours_lab.earnings import (
     EarningsSettings,
     after_close_entries,
 )
+from afterhours_lab.gateway import BoundedGatewayClient, build_gateway_client
 from afterhours_lab.status import status_path_for, write_status
 from afterhours_lab.trading_calendar import next_trading_day, previous_trading_day
 from afterhours_lab.watchlist import DEFAULT_WATCHLIST_PATH, save_watchlist
@@ -46,6 +48,48 @@ _next_trading_day = next_trading_day
 # previous run still holds it, this run skips rather than queuing behind a possibly
 # wedged process.
 ARCHIVE_LOCK_KEY = 0x41484C4541524E53  # the 8 ASCII bytes of "AHLEARNS" as an int64
+
+# Liquidity floor: earnings whose trailing average daily dollar volume falls under
+# this never enter earnings_events or the watchlist. These are names that don't get
+# traded here, and tracking them just adds untradeable noise to the reaction
+# statistics and the capture workload for no benefit.
+LIQUIDITY_LOOKBACK_DAYS = 10
+MIN_AVG_DOLLAR_VOLUME = 20_000_000.0
+
+
+async def _filter_by_liquidity(
+    gateway: BoundedGatewayClient, entries: list[EarningsEntry]
+) -> tuple[list[EarningsEntry], list[str]]:
+    """Drop entries whose trailing average daily dollar volume is under
+    MIN_AVG_DOLLAR_VOLUME. Returns (kept, dropped_symbols).
+
+    A symbol is kept, not dropped, when its history fetch fails or returns no bars:
+    losing a real earnings event to a transient gateway error is worse than
+    occasionally tracking one thin name.
+    """
+    kept: list[EarningsEntry] = []
+    dropped: list[str] = []
+    for entry in entries:
+        try:
+            response = await gateway.get_history(
+                entry.symbol, frequency="daily", days_back=LIQUIDITY_LOOKBACK_DAYS
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.warning("liquidity_check_failed", symbol=entry.symbol, error=str(exc))
+            kept.append(entry)
+            continue
+        bars = response.history.bars
+        if not bars:
+            kept.append(entry)
+            continue
+        avg_dollar_volume = sum(bar.close * bar.volume for bar in bars) / len(bars)
+        if avg_dollar_volume >= MIN_AVG_DOLLAR_VOLUME:
+            kept.append(entry)
+        else:
+            dropped.append(entry.symbol)
+    return kept, dropped
 
 
 def parse_args(argv: list[str], today: dt.date) -> argparse.Namespace:
@@ -211,6 +255,12 @@ async def _main(argv: list[str], *, today: dt.date | None = None) -> int:
             return 1
 
     matched = after_close_entries(calendar_entries)
+    dropped: list[str] = []
+    if matched:
+        async with build_gateway_client(AppSettings()) as gateway:
+            matched, dropped = await _filter_by_liquidity(gateway, matched)
+    if dropped:
+        print(f"dropped for thin liquidity (<${MIN_AVG_DOLLAR_VOLUME:,.0f}/day avg): {dropped}")
     if matched:
         symbols = [entry.symbol for entry in matched]
         print(f"after-close earnings ({args.from_date}..{args.to_date}): {symbols}")
