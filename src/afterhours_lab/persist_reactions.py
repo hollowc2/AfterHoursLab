@@ -8,7 +8,10 @@ Two properties make a stored row trustworthy:
 
 * **Insert-only.**  Every write is ``ON CONFLICT DO NOTHING`` on the version triple, so
   a rerun can never silently change a value another study already cited.  Changing a
-  definition means bumping a version and inserting alongside the old generation.
+  definition means bumping a version and inserting alongside the old generation. This
+  module never retracts a row; ``reprocess_stale_coverage.py`` is the one place that
+  does, and even there no row's *values* are ever changed — a stale row is stamped
+  ``retracted_at`` and a fresh row is inserted alongside it.
 * **Self-describing.**  ``source_evidence_sha256`` digests the exact bars and coverage
   identities the row was computed from, so a later rerun can prove the inputs were the
   same evidence rather than merely the same symbol and date.
@@ -122,6 +125,7 @@ INSERT INTO earnings_reaction_features (
     $45, $46::jsonb, $47::text[], $48::text[]
 )
 ON CONFLICT (symbol, earnings_date, feature_version, detector_version, classifier_version)
+    WHERE retracted_at IS NULL
 DO NOTHING
 RETURNING symbol
 """

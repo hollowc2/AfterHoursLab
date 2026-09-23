@@ -590,6 +590,7 @@ _EVENT_JOINS = """
               AND f.feature_version = {fv}
               AND f.detector_version = {dv}
               AND f.classifier_version = {cv}
+              AND f.retracted_at IS NULL
         LEFT JOIN (
             SELECT symbol, earnings_date,
                    array_agg(phase ORDER BY phase) AS covered_phases

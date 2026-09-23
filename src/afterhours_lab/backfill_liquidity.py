@@ -61,6 +61,7 @@ async def fetch_insufficient_data_backlog(conn) -> list[BacklogEvent]:
         JOIN earnings_reaction_features f
           ON f.symbol = e.symbol AND f.earnings_date = e.earnings_date
          AND f.feature_version = $1 AND f.detector_version = $2 AND f.classifier_version = $3
+         AND f.retracted_at IS NULL
         WHERE f.analysis_status = 'insufficient_data'
           AND e.liquidity_excluded_at IS NULL
         ORDER BY e.symbol, e.earnings_date
