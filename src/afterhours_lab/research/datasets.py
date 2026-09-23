@@ -1098,11 +1098,6 @@ async def fetch_monitor_health(conn, market_date: dt.date) -> MonitorHealth:
             WHERE market_date = $1
             ORDER BY cycle_completed_at DESC, id DESC
             LIMIT 1
-        ), degraded AS (
-            SELECT * FROM monitor_cycles
-            WHERE market_date = $1 AND status = 'degraded'
-            ORDER BY cycle_completed_at DESC, id DESC
-            LIMIT 1
         )
         SELECT
             (SELECT cycle_completed_at FROM latest) AS last_cycle,
@@ -1118,8 +1113,8 @@ async def fetch_monitor_health(conn, market_date: dt.date) -> MonitorHealth:
                FROM quote_evidence
               WHERE earnings_date = $1
                 AND capture_window = 'live_reaction_monitor') AS freshest_quote,
-            (SELECT error_kind FROM degraded) AS error_kind,
-            (SELECT error_message FROM degraded) AS error_message
+            (SELECT error_kind FROM latest WHERE status = 'degraded') AS error_kind,
+            (SELECT error_message FROM latest WHERE status = 'degraded') AS error_message
         """,
         market_date,
     )
