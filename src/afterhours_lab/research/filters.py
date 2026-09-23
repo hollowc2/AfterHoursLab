@@ -176,8 +176,15 @@ class EventFilter:
         )
 
     def scope_sql(self, params: ParamBuilder) -> str:
-        """Predicate defining the universe: after-close events in range, by symbol."""
-        clauses = ["e.hour = 'amc'"]
+        """Predicate defining the universe: after-close events in range, by symbol.
+
+        A liquidity-excluded event (see ``backfill_liquidity`` /
+        ``archive_earnings.MIN_AVG_DOLLAR_VOLUME``) never enters the universe, the
+        same as a thin name archive-earnings now keeps out going forward — it stays
+        in ``earnings_events`` and every evidence table for audit, just outside every
+        research view built on this filter.
+        """
+        clauses = ["e.hour = 'amc'", "e.liquidity_excluded_at IS NULL"]
         if self.date_from is not None:
             clauses.append(f"e.earnings_date >= {params.add(self.date_from)}")
         if self.date_to is not None:

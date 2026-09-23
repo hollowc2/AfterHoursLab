@@ -34,6 +34,7 @@ uv run ruff check .
 | Persist reaction features | `afterhours-lab-persist-reactions --from 2026-08-01 --to 2026-08-31` |
 | Persist following-session outcomes | `afterhours-lab-persist-outcomes --from 2026-08-01 --to 2026-08-31` |
 | Register / evaluate a study | `afterhours-lab-study register --spec studies/example.json` |
+| Retroactively flag thin-liquidity events in the `insufficient_data` backlog | `afterhours-lab-backfill-liquidity [--dry-run]` |
 | Live watchlist viewer | `afterhours-lab-watch` |
 | Gateway smoke test | `afterhours-lab-smoke` |
 
@@ -45,6 +46,15 @@ volume is under `MIN_AVG_DOLLAR_VOLUME` ($20M) before they ever reach
 `earnings_events` or the watchlist — thinly-traded names never get captured,
 monitored, or counted in `/quality`. A symbol is kept, not dropped, if its liquidity
 check itself fails (see `archive_earnings.py`).
+
+That filter was forward-only, so `backfill-liquidity` applies the same floor to
+`insufficient_data` events already recorded before it shipped. It never deletes or
+rewrites a row: it sets `earnings_events.liquidity_excluded_at` (see
+`backfill_liquidity.py`), which every research view (`EventFilter.scope_sql`)
+excludes going forward, while the raw event and its evidence stay in the database
+for audit. Only current liquidity is checkable — the gateway has no historical
+end-date parameter — so it's a proxy for liquidity at the time of each event, not
+an exact historical measure.
 
 ## Database
 

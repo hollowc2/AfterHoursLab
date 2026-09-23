@@ -70,7 +70,7 @@ def test_scope_sql_parameterizes_every_value() -> None:
     sql = event_filter.scope_sql(params)
 
     assert sql == (
-        "e.hour = 'amc' AND e.earnings_date >= $1 "
+        "e.hour = 'amc' AND e.liquidity_excluded_at IS NULL AND e.earnings_date >= $1 "
         "AND e.earnings_date <= $2 AND e.symbol = ANY($3::text[])"
     )
     assert params.params == [dt.date(2026, 1, 1), dt.date(2026, 6, 30), ["AAPL"]]

@@ -57,6 +57,25 @@ LIQUIDITY_LOOKBACK_DAYS = 10
 MIN_AVG_DOLLAR_VOLUME = 20_000_000.0
 
 
+async def check_liquidity(gateway: BoundedGatewayClient, symbol: str) -> float | None:
+    """Trailing average daily dollar volume for ``symbol``, or ``None`` if the
+    history fetch failed or returned no bars (an inconclusive check, not a floor
+    breach — see ``_filter_by_liquidity`` and ``backfill_liquidity``)."""
+    try:
+        response = await gateway.get_history(
+            symbol, frequency="daily", days_back=LIQUIDITY_LOOKBACK_DAYS
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        log.warning("liquidity_check_failed", symbol=symbol, error=str(exc))
+        return None
+    bars = response.history.bars
+    if not bars:
+        return None
+    return sum(bar.close * bar.volume for bar in bars) / len(bars)
+
+
 async def _filter_by_liquidity(
     gateway: BoundedGatewayClient, entries: list[EarningsEntry]
 ) -> tuple[list[EarningsEntry], list[str]]:
@@ -70,22 +89,8 @@ async def _filter_by_liquidity(
     kept: list[EarningsEntry] = []
     dropped: list[str] = []
     for entry in entries:
-        try:
-            response = await gateway.get_history(
-                entry.symbol, frequency="daily", days_back=LIQUIDITY_LOOKBACK_DAYS
-            )
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            log.warning("liquidity_check_failed", symbol=entry.symbol, error=str(exc))
-            kept.append(entry)
-            continue
-        bars = response.history.bars
-        if not bars:
-            kept.append(entry)
-            continue
-        avg_dollar_volume = sum(bar.close * bar.volume for bar in bars) / len(bars)
-        if avg_dollar_volume >= MIN_AVG_DOLLAR_VOLUME:
+        avg_dollar_volume = await check_liquidity(gateway, entry.symbol)
+        if avg_dollar_volume is None or avg_dollar_volume >= MIN_AVG_DOLLAR_VOLUME:
             kept.append(entry)
         else:
             dropped.append(entry.symbol)
