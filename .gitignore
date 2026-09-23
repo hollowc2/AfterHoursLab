@@ -9,3 +9,4 @@ watchlist.json
 data/
 *.log
 *.log.*
+.claude/
