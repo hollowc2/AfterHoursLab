@@ -1,8 +1,8 @@
-"""Retrospective, report-only analytics for after-close earnings reactions.
+"""Reproducible analytics and insert-only persistence for earnings reactions.
 
 The calculation deliberately reads the exact ``bar_evidence`` retrieval named by
-``earnings_ohlcv_coverage``.  It never calls the market-data gateway and never
-persists derived values, so rerunning it against unchanged evidence is reproducible.
+``earnings_ohlcv_coverage``.  It never calls the market-data gateway.  The report
+entry point is read-only; the separate builder requires an explicit ``--persist``.
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ import argparse
 import asyncio
 import dataclasses
 import datetime as dt
+import hashlib
 import json
 import math
 import re
@@ -25,12 +26,28 @@ from rich.table import Table
 from afterhours_lab.db.config import DatabaseSettings
 from afterhours_lab.db.connection import DatabasePool
 
+FEATURE_SCHEMA_VERSION = "earnings-reaction-v1"
+ALGORITHM_NAME = "fixed-preclose-close-confirmed-reaction"
 REACTION_THRESHOLD_PCT = 2.0
 DELAYED_AFTER_MINUTES = 15
 MIN_POSTMARKET_BARS = 5
 HORIZONS_MINUTES = (1, 5, 15, 30, 60, 105)
 DETECTOR_VERSION = "fixed-preclose-2pct-v1"
 CLASSIFIER_VERSION = "path-retention-v1"
+CLOSE_CONFIRMATION_RULE = "first minute close with abs(return_from_preclose_pct) >= threshold"
+CHECKPOINT_TIMESTAMP_CONVENTION = "interval_start; Nm uses postmarket_start + (N-1)m close"
+EARLY_CLOSE_POLICY = "exclude sessions whose covered postmarket start is not 16:00 America/New_York"
+FATAL_QUALITY_FLAG_POLICY = "insufficient if any configured fatal coverage flag is present"
+CLASSIFICATION_PRECEDENCE = (
+    "insufficient_data",
+    "no_trigger_in_window",
+    "whipsaw",
+    "spike_and_fade",
+    "delayed_breakout",
+    "immediate_continuation",
+)
+FEATURE_WINDOW_MINUTES = 105
+LABEL_CUTOFF_MINUTES = 105
 EASTERN = ZoneInfo("America/New_York")
 FATAL_QUALITY_FLAGS = {
     "duplicate_minute_bars",
@@ -75,6 +92,12 @@ class EventEvidence:
     postmarket_collection_mode: str | None = None
     regular_response_sha256: str | None = None
     postmarket_response_sha256: str | None = None
+    regular_gateway_received_at: dt.datetime | None = None
+    postmarket_gateway_received_at: dt.datetime | None = None
+    regular_source: str | None = None
+    postmarket_source: str | None = None
+    regular_market_date: dt.date | None = None
+    postmarket_market_date: dt.date | None = None
     regular_stale: bool = False
     postmarket_stale: bool = False
 
@@ -111,6 +134,209 @@ class ReactionFeatures:
     regular_stale: bool = False
     postmarket_stale: bool = False
     reason: str | None = None
+
+
+class AnalysisStatus(StrEnum):
+    COMPLETE = "complete"
+    NO_TRIGGER = "no_trigger_in_window"
+    INSUFFICIENT = "insufficient_data"
+
+
+@dataclasses.dataclass(frozen=True)
+class ReactionFeatureRow:
+    """Typed representation of one ``earnings_reaction_features`` row.
+
+    ``parameters_json`` is canonical JSON rather than an arbitrary mapping so the
+    exact persisted algorithm configuration is explicit and independently hashable.
+    ``computed_at`` is deliberately absent: PostgreSQL supplies it and idempotency
+    comparisons must not include it.
+    """
+
+    symbol: str
+    earnings_date: dt.date
+    feature_version: str
+    algorithm_name: str
+    detector_version: str
+    classifier_version: str
+    analysis_status: str
+    analysis_status_reason: str | None
+    reaction_class: str | None
+    reaction_direction: str | None
+    feature_window_start: dt.datetime | None
+    feature_window_end: dt.datetime | None
+    feature_cutoff_ts: dt.datetime | None
+    label_cutoff_ts: dt.datetime | None
+    reaction_timestamp: dt.datetime | None
+    detection_delay_minutes: int | None
+    reference_price: float | None
+    initial_return: float | None
+    return_1m: float | None
+    return_5m: float | None
+    return_15m: float | None
+    return_30m: float | None
+    return_60m: float | None
+    return_105m: float | None
+    window_high_return: float | None
+    window_low_return: float | None
+    max_favorable_excursion: float | None
+    max_adverse_excursion: float | None
+    max_retracement: float | None
+    reaction_vwap_proxy: float | None
+    volume_1m: int | None
+    volume_5m: int | None
+    volume_15m: int | None
+    volume_30m: int | None
+    volume_60m: int | None
+    volume_105m: int | None
+    source_bar_count: int
+    study_observed_minutes: int
+    study_missing_minutes: int
+    study_coverage_ratio: float
+    earnings_regular_response_sha256: str | None
+    earnings_regular_collection_mode: str | None
+    earnings_postmarket_response_sha256: str | None
+    earnings_postmarket_collection_mode: str | None
+    source_evidence_sha256: str
+    parameters_json: str
+    missing_fields: tuple[str, ...]
+    data_quality_flags: tuple[str, ...]
+
+
+class PersistenceConflict(RuntimeError):
+    """The version key already exists with materially different research evidence."""
+
+
+@dataclasses.dataclass(frozen=True)
+class PersistenceSummary:
+    inserted: int = 0
+    identical_existing: int = 0
+
+
+def algorithm_parameters() -> dict[str, object]:
+    """Return the complete immutable configuration for this feature definition."""
+    return {
+        "algorithm_name": ALGORITHM_NAME,
+        "checkpoint_timestamp_convention": CHECKPOINT_TIMESTAMP_CONVENTION,
+        "classification_precedence": list(CLASSIFICATION_PRECEDENCE),
+        "classifier_version": CLASSIFIER_VERSION,
+        "close_confirmation_rule": CLOSE_CONFIRMATION_RULE,
+        "delayed_threshold_minutes": DELAYED_AFTER_MINUTES,
+        "detector_version": DETECTOR_VERSION,
+        "early_close_policy": EARLY_CLOSE_POLICY,
+        "fatal_quality_flag_policy": FATAL_QUALITY_FLAG_POLICY,
+        "fatal_quality_flags": sorted(FATAL_QUALITY_FLAGS),
+        "feature_schema_version": FEATURE_SCHEMA_VERSION,
+        "feature_window": {
+            "end_exclusive_minutes_after_start": FEATURE_WINDOW_MINUTES,
+            "start_local_time": "16:00:00",
+            "timezone": "America/New_York",
+        },
+        "fixed_horizons_minutes": list(HORIZONS_MINUTES),
+        "label_cutoff_minutes_after_start": LABEL_CUTOFF_MINUTES,
+        "minimum_postmarket_bars": MIN_POSTMARKET_BARS,
+        "reaction_threshold_pct": REACTION_THRESHOLD_PCT,
+    }
+
+
+def canonical_json(value: object) -> str:
+    """Encode deterministic JSON with sorted keys and Python's stable shortest floats."""
+    return json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    )
+
+
+def parameters_json(parameters: dict[str, object] | None = None) -> str:
+    return canonical_json(parameters if parameters is not None else algorithm_parameters())
+
+
+def _canonical_timestamp(value: dt.datetime | None) -> str | None:
+    if value is None:
+        return None
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError("provenance timestamps must be timezone-aware")
+    return value.astimezone(dt.UTC).isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+
+def _canonical_number(value: float) -> float:
+    if not math.isfinite(value):
+        raise ValueError("provenance numbers must be finite")
+    return 0.0 if value == 0 else value
+
+
+def _canonical_bar(bar: Bar) -> dict[str, object]:
+    return {
+        "close": _canonical_number(bar.close),
+        "high": _canonical_number(bar.high),
+        "low": _canonical_number(bar.low),
+        "open": _canonical_number(bar.open),
+        "ts": _canonical_timestamp(bar.ts),
+        "volume": bar.volume,
+    }
+
+
+def _sorted_canonical_bars(bars: Iterable[Bar]) -> list[dict[str, object]]:
+    canonical = [_canonical_bar(bar) for bar in bars]
+    return sorted(canonical, key=canonical_json)
+
+
+def evidence_payload(
+    event: EventEvidence,
+    *,
+    parameters: dict[str, object] | None = None,
+) -> dict[str, object]:
+    """Return all source identities, bars, cutoffs, and versions used by calculation."""
+    resolved = parameters if parameters is not None else algorithm_parameters()
+    return {
+        "earnings_date": event.earnings_date.isoformat(),
+        "postmarket": {
+            "bars": _sorted_canonical_bars(event.postmarket_bars),
+            "collection_mode": event.postmarket_collection_mode,
+            "covered": event.postmarket_covered,
+            "expected_end": _canonical_timestamp(event.postmarket_expected_end),
+            "expected_start": _canonical_timestamp(event.postmarket_expected_start),
+            "gateway_received_at": _canonical_timestamp(event.postmarket_gateway_received_at),
+            "market_date": (
+                event.postmarket_market_date.isoformat()
+                if event.postmarket_market_date is not None
+                else None
+            ),
+            "response_sha256": event.postmarket_response_sha256,
+            "source": event.postmarket_source,
+            "stale": event.postmarket_stale,
+        },
+        "quality_flags": sorted(event.data_quality_flags),
+        "regular": {
+            "bars": _sorted_canonical_bars(event.regular_bars),
+            "collection_mode": event.regular_collection_mode,
+            "covered": event.regular_covered,
+            "expected_end": _canonical_timestamp(event.regular_expected_end),
+            "expected_start": _canonical_timestamp(event.regular_expected_start),
+            "gateway_received_at": _canonical_timestamp(event.regular_gateway_received_at),
+            "market_date": (
+                event.regular_market_date.isoformat()
+                if event.regular_market_date is not None
+                else None
+            ),
+            "response_sha256": event.regular_response_sha256,
+            "source": event.regular_source,
+            "stale": event.regular_stale,
+        },
+        "resolved_parameters": resolved,
+        "symbol": event.symbol,
+    }
+
+
+def source_evidence_sha256(
+    event: EventEvidence,
+    *,
+    parameters: dict[str, object] | None = None,
+) -> str:
+    encoded = canonical_json(evidence_payload(event, parameters=parameters)).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _pct_change(before: float, after: float) -> float:
@@ -494,6 +720,269 @@ def compute_reaction_features(event: EventEvidence) -> ReactionFeatures:
     )
 
 
+def _scheduled_window(earnings_date: dt.date) -> tuple[dt.datetime, dt.datetime]:
+    start = dt.datetime.combine(earnings_date, dt.time(16), EASTERN)
+    return start, start + dt.timedelta(minutes=FEATURE_WINDOW_MINUTES)
+
+
+def _missing_fields(
+    result: ReactionFeatures,
+    *,
+    feature_cutoff_ts: dt.datetime | None,
+    regular_source_complete: bool,
+    postmarket_source_complete: bool,
+) -> tuple[str, ...]:
+    values: dict[str, object | None] = {
+        "reaction_class": None,
+        "reaction_direction": None,
+        "reaction_timestamp": None,
+        "detection_delay_minutes": None,
+        "initial_return": None,
+        "max_favorable_excursion": None,
+        "max_adverse_excursion": None,
+        "max_retracement": None,
+        "feature_cutoff_ts": feature_cutoff_ts,
+        "reference_price": result.pre_close,
+        "reaction_vwap_proxy": result.reaction_vwap_proxy,
+        "window_high_return": result.window_high_return_pct,
+        "window_low_return": result.window_low_return_pct,
+    }
+    for minutes in HORIZONS_MINUTES:
+        values[f"return_{minutes}m"] = result.returns_pct.get(minutes)
+        values[f"volume_{minutes}m"] = result.cumulative_volume.get(minutes)
+    if not regular_source_complete:
+        values["earnings_regular_response_sha256"] = None
+        values["earnings_regular_collection_mode"] = None
+    if not postmarket_source_complete:
+        values["earnings_postmarket_response_sha256"] = None
+        values["earnings_postmarket_collection_mode"] = None
+    return tuple(sorted(name for name, value in values.items() if value is None))
+
+
+def to_reaction_feature_row(
+    event: EventEvidence,
+    result: ReactionFeatures,
+    *,
+    parameter_overrides: dict[str, object] | None = None,
+) -> ReactionFeatureRow:
+    """Reconcile a calculation result with migration 007's status/NULL contract."""
+    if (event.symbol, event.earnings_date) != (result.symbol, result.earnings_date):
+        raise ValueError("event evidence and reaction result identify different events")
+
+    resolved_parameters = algorithm_parameters()
+    resolved_parameters["detector_version"] = result.detector_version
+    resolved_parameters["classifier_version"] = result.classifier_version
+    if parameter_overrides:
+        resolved_parameters.update(parameter_overrides)
+
+    regular_source_complete = bool(
+        result.regular_response_sha256 and result.regular_collection_mode
+    )
+    postmarket_source_complete = bool(
+        result.postmarket_response_sha256 and result.postmarket_collection_mode
+    )
+    source_provenance_complete = regular_source_complete and postmarket_source_complete
+
+    if result.classification == PathClassification.INSUFFICIENT_DATA:
+        status = AnalysisStatus.INSUFFICIENT
+    elif not source_provenance_complete:
+        status = AnalysisStatus.INSUFFICIENT
+    elif result.classification == PathClassification.NO_MEANINGFUL:
+        status = AnalysisStatus.NO_TRIGGER
+    else:
+        status = AnalysisStatus.COMPLETE
+
+    window_start, window_end = _scheduled_window(event.earnings_date)
+    label_cutoff = window_end
+    if status == AnalysisStatus.COMPLETE:
+        feature_cutoff = result.reaction_timestamp
+    elif status == AnalysisStatus.NO_TRIGGER:
+        feature_cutoff = window_end
+    else:
+        feature_cutoff = None
+
+    insufficient = status == AnalysisStatus.INSUFFICIENT
+    no_trigger = status == AnalysisStatus.NO_TRIGGER
+    missing = (
+        _missing_fields(
+            result,
+            feature_cutoff_ts=feature_cutoff,
+            regular_source_complete=regular_source_complete,
+            postmarket_source_complete=postmarket_source_complete,
+        )
+        if insufficient
+        else ()
+    )
+    reason = result.reason
+    if insufficient and not source_provenance_complete:
+        provenance_reason = "missing canonical response hash or collection mode"
+        reason = f"{reason}; {provenance_reason}" if reason else provenance_reason
+    if no_trigger:
+        reason = "no_trigger_in_window"
+
+    reaction_class = None if insufficient else result.classification.value
+    initial_return = None if (insufficient or no_trigger) else result.initial_return_pct
+    reaction_direction = None
+    if status == AnalysisStatus.COMPLETE:
+        assert initial_return is not None
+        reaction_direction = "up" if initial_return > 0 else "down"
+    elif no_trigger:
+        reaction_direction = "flat"
+
+    return ReactionFeatureRow(
+        symbol=result.symbol,
+        earnings_date=result.earnings_date,
+        feature_version=FEATURE_SCHEMA_VERSION,
+        algorithm_name=ALGORITHM_NAME,
+        detector_version=result.detector_version,
+        classifier_version=result.classifier_version,
+        analysis_status=status.value,
+        analysis_status_reason=reason if insufficient or no_trigger else None,
+        reaction_class=reaction_class,
+        reaction_direction=reaction_direction,
+        feature_window_start=window_start,
+        feature_window_end=window_end,
+        feature_cutoff_ts=feature_cutoff,
+        label_cutoff_ts=label_cutoff,
+        reaction_timestamp=None if insufficient else result.reaction_timestamp,
+        detection_delay_minutes=None if insufficient else result.detection_delay_minutes,
+        reference_price=result.pre_close,
+        initial_return=initial_return,
+        return_1m=result.returns_pct.get(1),
+        return_5m=result.returns_pct.get(5),
+        return_15m=result.returns_pct.get(15),
+        return_30m=result.returns_pct.get(30),
+        return_60m=result.returns_pct.get(60),
+        return_105m=result.returns_pct.get(105),
+        window_high_return=result.window_high_return_pct,
+        window_low_return=result.window_low_return_pct,
+        max_favorable_excursion=(
+            None if insufficient or no_trigger else result.max_favorable_excursion_pct
+        ),
+        max_adverse_excursion=(
+            None if insufficient or no_trigger else result.max_adverse_excursion_pct
+        ),
+        max_retracement=None if insufficient or no_trigger else result.retracement_pct,
+        reaction_vwap_proxy=result.reaction_vwap_proxy,
+        volume_1m=result.cumulative_volume.get(1),
+        volume_5m=result.cumulative_volume.get(5),
+        volume_15m=result.cumulative_volume.get(15),
+        volume_30m=result.cumulative_volume.get(30),
+        volume_60m=result.cumulative_volume.get(60),
+        volume_105m=result.cumulative_volume.get(105),
+        source_bar_count=len(event.regular_bars) + len(event.postmarket_bars),
+        study_observed_minutes=result.study_observed_minutes,
+        study_missing_minutes=result.study_missing_minutes,
+        study_coverage_ratio=result.study_coverage_ratio,
+        earnings_regular_response_sha256=(
+            result.regular_response_sha256 if regular_source_complete else None
+        ),
+        earnings_regular_collection_mode=(
+            result.regular_collection_mode if regular_source_complete else None
+        ),
+        earnings_postmarket_response_sha256=(
+            result.postmarket_response_sha256 if postmarket_source_complete else None
+        ),
+        earnings_postmarket_collection_mode=(
+            result.postmarket_collection_mode if postmarket_source_complete else None
+        ),
+        source_evidence_sha256=source_evidence_sha256(
+            event, parameters=resolved_parameters
+        ),
+        parameters_json=parameters_json(resolved_parameters),
+        missing_fields=missing,
+        data_quality_flags=tuple(sorted(set(result.data_quality_flags))),
+    )
+
+
+ROW_COLUMNS = tuple(
+    "parameters" if field.name == "parameters_json" else field.name
+    for field in dataclasses.fields(ReactionFeatureRow)
+)
+ROW_SELECT_COLUMNS = tuple(
+    "parameters::text AS parameters_json" if name == "parameters" else name
+    for name in ROW_COLUMNS
+)
+VERSION_KEY_COLUMNS = (
+    "symbol",
+    "earnings_date",
+    "feature_version",
+    "detector_version",
+    "classifier_version",
+)
+_INSERT_PLACEHOLDERS = ", ".join(f"${index}" for index in range(1, len(ROW_COLUMNS) + 1))
+INSERT_REACTION_FEATURE_SQL = (
+    f"INSERT INTO earnings_reaction_features ({', '.join(ROW_COLUMNS)}) "
+    f"VALUES ({_INSERT_PLACEHOLDERS}) "
+    f"ON CONFLICT ({', '.join(VERSION_KEY_COLUMNS)}) DO NOTHING RETURNING symbol"
+)
+SELECT_REACTION_FEATURE_SQL = (
+    f"SELECT {', '.join(ROW_SELECT_COLUMNS)} FROM earnings_reaction_features WHERE "
+    + " AND ".join(
+        f"{column}=${index}" for index, column in enumerate(VERSION_KEY_COLUMNS, start=1)
+    )
+)
+
+
+def _row_values(row: ReactionFeatureRow) -> tuple[object, ...]:
+    values = []
+    for field in dataclasses.fields(row):
+        value = getattr(row, field.name)
+        if field.name in {"missing_fields", "data_quality_flags"}:
+            value = list(value)
+        values.append(value)
+    return tuple(values)
+
+
+def _normalize_logical_value(name: str, value: object) -> object:
+    if name == "parameters_json":
+        if isinstance(value, str):
+            value = json.loads(value)
+        return canonical_json(value)
+    if isinstance(value, dt.datetime):
+        return _canonical_timestamp(value)
+    if isinstance(value, dt.date):
+        return value.isoformat()
+    if isinstance(value, (list, tuple)):
+        return tuple(value)
+    return value
+
+
+def _logical_payload(row: ReactionFeatureRow | object) -> dict[str, object]:
+    if isinstance(row, ReactionFeatureRow):
+        raw = dataclasses.asdict(row)
+    else:
+        raw = {field.name: row[field.name] for field in dataclasses.fields(ReactionFeatureRow)}
+    return {name: _normalize_logical_value(name, value) for name, value in raw.items()}
+
+
+async def persist_reaction_feature_rows(
+    conn,
+    rows: Sequence[ReactionFeatureRow],
+) -> PersistenceSummary:
+    """Insert a batch atomically, accepting only logically identical existing rows."""
+    inserted = 0
+    identical = 0
+    async with conn.transaction():
+        for row in rows:
+            inserted_record = await conn.fetchrow(
+                INSERT_REACTION_FEATURE_SQL, *_row_values(row)
+            )
+            if inserted_record is not None:
+                inserted += 1
+                continue
+            key = tuple(getattr(row, column) for column in VERSION_KEY_COLUMNS)
+            existing = await conn.fetchrow(SELECT_REACTION_FEATURE_SQL, *key)
+            if existing is None or _logical_payload(existing) != _logical_payload(row):
+                raise PersistenceConflict(
+                    "conflicting persisted reaction evidence for "
+                    f"{row.symbol} {row.earnings_date.isoformat()} "
+                    f"{row.feature_version}/{row.detector_version}/{row.classifier_version}"
+                )
+            identical += 1
+    return PersistenceSummary(inserted=inserted, identical_existing=identical)
+
+
 async def fetch_event_evidence(
     conn,
     *,
@@ -602,6 +1091,12 @@ async def fetch_event_evidence(
                 postmarket_collection_mode=row["post_collection_mode"],
                 regular_response_sha256=row["regular_response_sha256"],
                 postmarket_response_sha256=row["post_response_sha256"],
+                regular_gateway_received_at=row["regular_received_at"],
+                postmarket_gateway_received_at=row["post_received_at"],
+                regular_source=row["regular_source"],
+                postmarket_source=row["post_source"],
+                regular_market_date=row["regular_market_date"],
+                postmarket_market_date=row["post_market_date"],
                 regular_stale=regular_stale,
                 postmarket_stale=postmarket_stale,
             )
@@ -691,6 +1186,119 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
             normalized.append(symbol)
     args.symbol = normalized
     return args
+
+
+def parse_builder_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Preview or explicitly persist versioned reaction features from authoritative "
+            "earnings OHLCV evidence"
+        )
+    )
+    parser.add_argument("--from", dest="from_date", required=True, type=dt.date.fromisoformat)
+    parser.add_argument("--to", dest="to_date", required=True, type=dt.date.fromisoformat)
+    parser.add_argument("--symbol", action="append", default=[], help="repeat to limit symbols")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
+        "--persist",
+        action="store_true",
+        help="insert the batch; without this flag the command is a read-only preview",
+    )
+    mode.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="explicitly select the default read-only preview mode",
+    )
+    args = parser.parse_args(argv)
+    if args.from_date > args.to_date:
+        parser.error("--from must be on or before --to")
+    normalized: list[str] = []
+    for raw_symbol in args.symbol:
+        symbol = raw_symbol.strip().upper()
+        if not re.fullmatch(r"[A-Z][A-Z0-9.-]{0,9}", symbol):
+            parser.error(f"invalid equity symbol: {raw_symbol}")
+        if symbol not in normalized:
+            normalized.append(symbol)
+    args.symbol = normalized
+    return args
+
+
+def _status_counts(rows: Sequence[ReactionFeatureRow]) -> dict[str, int]:
+    return {
+        status.value: sum(row.analysis_status == status.value for row in rows)
+        for status in AnalysisStatus
+    }
+
+
+def _print_builder_summary(
+    rows: Sequence[ReactionFeatureRow],
+    *,
+    inserted: int,
+    identical: int,
+    conflicts: int,
+    dry_run: bool,
+) -> None:
+    counts = _status_counts(rows)
+    print(
+        "reaction feature build: "
+        f"events_examined={len(rows)} "
+        f"complete_features={counts[AnalysisStatus.COMPLETE.value]} "
+        f"no_trigger_rows={counts[AnalysisStatus.NO_TRIGGER.value]} "
+        f"insufficient_rows={counts[AnalysisStatus.INSUFFICIENT.value]} "
+        f"inserted_rows={inserted} "
+        f"identical_existing_rows={identical} "
+        f"conflicts_failures={conflicts} "
+        f"mode={'dry-run' if dry_run else 'persist'}"
+    )
+
+
+async def run_reaction_feature_builder(conn, args: argparse.Namespace) -> int:
+    evidence = await fetch_event_evidence(
+        conn,
+        from_date=args.from_date,
+        to_date=args.to_date,
+        symbols=args.symbol,
+    )
+    results = [compute_reaction_features(event) for event in evidence]
+    rows = [
+        to_reaction_feature_row(event, result)
+        for event, result in zip(evidence, results, strict=True)
+    ]
+    if not args.persist:
+        _print_builder_summary(
+            rows, inserted=0, identical=0, conflicts=0, dry_run=True
+        )
+        return 0
+    try:
+        summary = await persist_reaction_feature_rows(conn, rows)
+    except PersistenceConflict as exc:
+        _print_builder_summary(
+            rows, inserted=0, identical=0, conflicts=1, dry_run=False
+        )
+        print(f"persistence conflict: {exc}", file=sys.stderr)
+        return 2
+    _print_builder_summary(
+        rows,
+        inserted=summary.inserted,
+        identical=summary.identical_existing,
+        conflicts=0,
+        dry_run=False,
+    )
+    return 0
+
+
+async def _build_main(argv: list[str]) -> int:
+    args = parse_builder_args(argv)
+    pool = await DatabasePool.connect(DatabaseSettings())
+    try:
+        async with pool.acquire() as conn:
+            return await run_reaction_feature_builder(conn, args)
+    finally:
+        await pool.close()
+
+
+def build_main() -> None:
+    sys.exit(asyncio.run(_build_main(sys.argv[1:])))
 
 
 async def _main(argv: list[str]) -> int:

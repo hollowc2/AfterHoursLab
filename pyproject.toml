@@ -28,6 +28,7 @@ afterhours-lab-capture-ohlcv = "afterhours_lab.capture_ohlcv:main"
 afterhours-lab-audit-ohlcv = "afterhours_lab.audit_ohlcv:main"
 afterhours-lab-moves = "afterhours_lab.moves:main"
 afterhours-lab-reactions = "afterhours_lab.reactions:main"
+afterhours-lab-build-reaction-features = "afterhours_lab.reactions:build_main"
 
 [build-system]
 requires = ["hatchling"]
