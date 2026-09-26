@@ -7,6 +7,7 @@ import pytest
 from afterhours_lab.calendar_reconcile import (
     LOOKUP_RADIUS_DAYS,
     RecordedEvent,
+    describe,
     lookup_listings,
     plan_reconciliation,
 )
@@ -96,3 +97,18 @@ async def test_lookup_spans_each_symbols_dates_and_skips_failures() -> None:
         ("DOWN", SEP11 - radius, SEP11 + radius),
     ]
     assert [entry.symbol for entry in listed] == ["ANAB"]
+
+
+def test_describe_says_would_under_dry_run() -> None:
+    plan = plan_reconciliation(
+        [recorded(SEP11), recorded(SEP21, superseded=True)], [listing(SEP21)]
+    )
+
+    assert describe(plan) == [
+        "superseded ANAB 2026-09-11: earnings calendar lists 2026 Q2 on 2026-09-21",
+        "reinstated ANAB 2026-09-21: calendar lists it again",
+    ]
+    assert describe(plan, dry_run=True) == [
+        "would supersede ANAB 2026-09-11: earnings calendar lists 2026 Q2 on 2026-09-21",
+        "would reinstate ANAB 2026-09-21: calendar lists it again",
+    ]

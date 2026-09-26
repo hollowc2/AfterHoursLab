@@ -242,12 +242,15 @@ async def reconcile(
     return plan
 
 
-def describe(plan: ReconcilePlan) -> list[str]:
+def describe(plan: ReconcilePlan, *, dry_run: bool = False) -> list[str]:
+    supersede, reinstate = (
+        ("would supersede", "would reinstate") if dry_run else ("superseded", "reinstated")
+    )
     lines = [
-        f"superseded {item.symbol} {item.earnings_date}: {item.reason}" for item in plan.supersede
+        f"{supersede} {item.symbol} {item.earnings_date}: {item.reason}" for item in plan.supersede
     ]
     lines += [
-        f"reinstated {event.symbol} {event.earnings_date}: calendar lists it again"
+        f"{reinstate} {event.symbol} {event.earnings_date}: calendar lists it again"
         for event in plan.reinstate
     ]
     return lines
@@ -290,7 +293,7 @@ async def _main(argv: list[str]) -> int:
                         await apply_plan(conn, plan)
     finally:
         await pool.close()
-    for line in describe(plan):
+    for line in describe(plan, dry_run=args.dry_run):
         print(line)
     prefix = "dry run; would have " if args.dry_run else ""
     print(
