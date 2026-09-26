@@ -240,7 +240,7 @@ async def test_today_stream_discloses_database_failure_without_empty_market_data
 
     assert len(frames) == 1
     assert "event: degraded" in frames[0]
-    assert "no market data was substituted" in frames[0]
+    assert "No values have been estimated in its place" in frames[0]
     assert "database unavailable" not in frames[0]
 
 

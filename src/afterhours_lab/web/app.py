@@ -117,8 +117,8 @@ async def _today_event_stream(
                 {
                     "state": "unavailable",
                     "message": (
-                        "Database state is temporarily unavailable; "
-                        "no market data was substituted."
+                        "The database is temporarily unavailable. "
+                        "No values have been estimated in its place."
                     ),
                 },
                 separators=(",", ":"),
@@ -259,7 +259,7 @@ def create_app(
         try:
             return dt.date.fromisoformat(date) if date else dt.datetime.now(EASTERN).date()
         except ValueError as exc:
-            raise QueryError(f"date must be an ISO date, got {date!r}") from exc
+            raise QueryError(f"date must be an ISO date (YYYY-MM-DD), got {date!r}") from exc
 
     async def load_today(request: Request, market_date: dt.date) -> dict[str, Any]:
         async with request.app.state.pool.acquire() as conn:
@@ -400,18 +400,27 @@ def create_app(
 
     # ------------------------------------------------------------ event detail
 
-    async def load_detail(request: Request, symbol: str, earnings_date: str):
+    def parse_event_key(symbol: str, earnings_date: str) -> tuple[str, dt.date]:
         try:
             clean_symbol = normalize_symbol(symbol)
+        except ValueError as exc:
+            raise QueryError(f"{symbol!r} is not a valid ticker symbol") from exc
+        try:
             date = dt.date.fromisoformat(earnings_date)
         except ValueError as exc:
-            raise QueryError(str(exc)) from exc
+            raise QueryError(
+                f"earnings date must be an ISO date (YYYY-MM-DD), got {earnings_date!r}"
+            ) from exc
+        return clean_symbol, date
+
+    async def load_detail(request: Request, symbol: str, earnings_date: str):
+        clean_symbol, date = parse_event_key(symbol, earnings_date)
         async with request.app.state.pool.acquire() as conn:
             detail = await fetch_event_detail(conn, clean_symbol, date)
         if detail is None:
             raise HTTPException(
                 status_code=404,
-                detail=f"no earnings event for {clean_symbol} on {date.isoformat()}",
+                detail=f"No earnings event found for {clean_symbol} on {date.isoformat()}.",
             )
         return detail
 
@@ -423,7 +432,7 @@ def create_app(
         daily_figure = None
         daily_context_message = None
         if request.app.state.gateway is None:
-            daily_context_message = "Daily history is unavailable in this environment."
+            daily_context_message = "Daily price history is not available here."
         else:
             try:
                 daily_history = await request.app.state.gateway.get_history(
@@ -433,7 +442,7 @@ def create_app(
                 )
                 history = daily_history.history
                 if history.symbol != detail.summary.symbol or history.frequency != "daily":
-                    daily_context_message = "Daily history returned an unexpected identity."
+                    daily_context_message = "Daily price history did not match this symbol."
                 else:
                     daily_figure = charts.daily_context_figure(
                         detail.summary.symbol,
@@ -442,11 +451,11 @@ def create_app(
                         reference_price=detail.summary.reference_price,
                     )
                     if daily_figure is None:
-                        daily_context_message = "No daily bars were returned for this symbol."
+                        daily_context_message = "No daily price history for this symbol."
             except asyncio.CancelledError:
                 raise
             except Exception:
-                daily_context_message = "Daily history is temporarily unavailable."
+                daily_context_message = "Daily price history is temporarily unavailable."
         return render(
             request,
             "event.html",
@@ -485,11 +494,7 @@ def create_app(
         body: str = Form(...),
         tags: str = Form(""),
     ) -> RedirectResponse:
-        try:
-            clean_symbol = normalize_symbol(symbol)
-            date = dt.date.fromisoformat(earnings_date)
-        except ValueError as exc:
-            raise QueryError(str(exc)) from exc
+        clean_symbol, date = parse_event_key(symbol, earnings_date)
         try:
             async with request.app.state.pool.acquire() as conn:
                 await add_note(
