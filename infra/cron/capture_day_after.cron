@@ -1,5 +1,0 @@
-# AfterHoursLab: capture day_after open-through-close candles — 9:28 AM America/New_York, weekdays.
-# Vixie cron ignores CRON_TZ in user crontabs; use UTC slots + wrapper for DST.
-# Install:
-#   crontab -l 2>/dev/null | grep -v run_capture_day_after_cron.sh | cat - infra/cron/capture_day_after.cron | crontab -
-28 13,14 * * 1-5 cd /opt/afterhours-lab && tools/run_capture_day_after_cron.sh >> /opt/afterhours-lab/capture_day_after.log 2>&1

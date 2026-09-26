@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Refresh earnings_events and the persisted watchlist at 8:30 AM, 3:55 PM, and
 # 7:55 PM America/New_York on weekdays. This is the producer every capture
-# window consumes: capture.py picks its symbols out of earnings_events, so a
-# late calendar addition must land before the 4:05 PM and 8:05 PM captures.
+# window consumes: capture_ohlcv.py picks its symbols out of earnings_events, so
+# a late calendar addition must land before the 4:05 PM and 8:05 PM captures.
 #
 # The morning run populates the day's universe and backfills yesterday's
 # actuals. The two later refreshes close the race where the upstream calendar
