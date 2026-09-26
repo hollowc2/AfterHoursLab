@@ -13,7 +13,12 @@ from afterhours_lab.outcomes import (
     compute_following_session_outcome,
     source_evidence_digest,
 )
-from afterhours_lab.persist_outcomes import INSERT_COLUMNS, INSERT_SQL, persist_outcomes
+from afterhours_lab.persist_outcomes import (
+    INSERT_COLUMNS,
+    INSERT_SQL,
+    build_outcome_row,
+    persist_outcomes,
+)
 from afterhours_lab.research.outcomes import fetch_following_session_evidence
 
 UTC = dt.UTC
@@ -103,6 +108,76 @@ def test_missing_exact_horizon_is_not_replaced_by_a_neighbor() -> None:
     assert result["analysis_status"] == "insufficient_data"
     assert result["regular_return_5m"] is None
     assert "regular_return_5m" in result["missing_fields"]
+
+
+def _sparse_evidence(*, following_dropped: int, premarket_bars: int = 2):
+    """Evidence shaped like a liquid mid-cap: sparse premarket, a few gaps in the
+    following regular session that never hit a label checkpoint."""
+    evidence = _evidence()
+    premarket = evidence.premarket
+    following = evidence.following_regular
+    assert premarket is not None and following is not None
+    start = premarket.expected_start
+    sparse_premarket = tuple(
+        _bar(start + dt.timedelta(minutes=30 + 40 * index), 105 + index)
+        for index in range(premarket_bars)
+    )
+    checkpoints = {0, 4, 29, 59, 389}
+    dropped = [minute for minute in range(390) if minute not in checkpoints][:following_dropped]
+    gapped = tuple(
+        bar for bar in following.bars
+        if (bar.ts - REGULAR_OPEN) // dt.timedelta(minutes=1) not in dropped
+    )
+    return dataclasses.replace(
+        evidence,
+        premarket=dataclasses.replace(
+            premarket,
+            expected_end=start + dt.timedelta(minutes=150),
+            observed_minutes=len(sparse_premarket),
+            expected_minutes=150,
+            bars=sparse_premarket,
+        ),
+        following_regular=dataclasses.replace(
+            following, observed_minutes=len(gapped), expected_minutes=390, bars=gapped
+        ),
+    )
+
+
+def test_sparse_premarket_and_minor_regular_gaps_are_complete() -> None:
+    evidence = _sparse_evidence(following_dropped=15)  # 375/390 = 96%
+    now = evidence.expected_following_close + dt.timedelta(minutes=11)
+    result = compute_following_session_outcome(evidence, now=now)
+
+    assert result["analysis_status"] == "complete", result["missing_fields"]
+    premarket = evidence.premarket
+    assert premarket is not None
+    assert result["premarket_first"] == 105
+    assert result["premarket_first_ts"] == premarket.bars[0].ts
+    assert result["premarket_last"] == 106
+    assert result["premarket_last_ts"] == premarket.bars[-1].ts
+    row = build_outcome_row(evidence, now=now)
+    assert row["outcome_values"]["premarket_first_ts"] == premarket.bars[0].ts
+    assert row["outcome_values"]["premarket_last_ts"] == premarket.bars[-1].ts
+
+
+def test_regular_session_below_coverage_floor_is_insufficient() -> None:
+    evidence = _sparse_evidence(following_dropped=25)  # 365/390 = 93.6%
+    result = compute_following_session_outcome(
+        evidence, now=evidence.expected_following_close + dt.timedelta(minutes=11)
+    )
+
+    assert result["analysis_status"] == "insufficient_data"
+    assert "following_regular_coverage" in result["missing_fields"]
+
+
+def test_premarket_capture_without_bars_is_insufficient() -> None:
+    evidence = _sparse_evidence(following_dropped=0, premarket_bars=0)
+    result = compute_following_session_outcome(
+        evidence, now=evidence.expected_following_close + dt.timedelta(minutes=11)
+    )
+
+    assert result["analysis_status"] == "insufficient_data"
+    assert {"premarket_first", "premarket_last"} <= set(result["missing_fields"])
 
 
 def test_not_yet_available_is_distinct_from_bad_coverage() -> None:

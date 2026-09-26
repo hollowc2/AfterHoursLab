@@ -9,10 +9,16 @@ from typing import Any
 
 from afterhours_lab.canonical import canonical_digest
 
-OUTCOME_VERSION = "following-session-v1"
+# v2 (2026-09-25): v1 required every minute of all three phases, which only
+# mega-caps ever satisfy (9 of 79 eligible events complete). v2 keeps exact-bar
+# labels but reads premarket from its first/last *observed* bars with no coverage
+# floor, and needs MIN_REGULAR_COVERAGE_RATIO rather than 100% of each regular
+# session. v1 rows remain for audit and for studies pinned to v1.
+OUTCOME_VERSION = "following-session-v2"
 OUTCOME_ALGORITHM = "following_session_observation"
 HORIZONS_MINUTES = (5, 30, 60)
 AUTHORITATIVE_CAPTURE_GRACE_MINUTES = 10
+MIN_REGULAR_COVERAGE_RATIO = 0.95
 
 
 @dataclasses.dataclass(frozen=True)
@@ -124,6 +130,9 @@ def compute_following_session_outcome(
 
     Minute N is the close-confirmed bar whose start timestamp is session_open + N - 1
     minutes. A missing exact timestamp remains missing; no nearest-bar substitution occurs.
+    Premarket is the exception: it trades sparsely, so its first/last values are the
+    first and last bars actually observed in the authoritative capture (their
+    timestamps are recorded), and at least one bar is required.
     """
     if now.tzinfo is None or now.utcoffset() is None:
         raise ValueError("now must be timezone-aware")
@@ -156,13 +165,8 @@ def compute_following_session_outcome(
         for minute in HORIZONS_MINUTES
     }
 
-    premarket_first_bar = exact(
-        evidence.premarket, evidence.premarket.expected_start if evidence.premarket else None
-    )
-    premarket_last_bar = exact(
-        evidence.premarket,
-        evidence.premarket.expected_end - dt.timedelta(minutes=1) if evidence.premarket else None,
-    )
+    premarket_first_bar = premarket[0] if premarket else None
+    premarket_last_bar = premarket[-1] if premarket else None
     following_open_bar = exact(evidence.following_regular, following_open)
     following_close_bar = exact(
         evidence.following_regular,
@@ -174,9 +178,11 @@ def compute_following_session_outcome(
         "reference_close": reference,
         "reference_close_ts": reference_bar.ts if reference_bar else None,
         "premarket_first": premarket_first_bar.open if premarket_first_bar else None,
+        "premarket_first_ts": premarket_first_bar.ts if premarket_first_bar else None,
         "premarket_high": max((bar.high for bar in premarket), default=None),
         "premarket_low": min((bar.low for bar in premarket), default=None),
         "premarket_last": premarket_last_bar.close if premarket_last_bar else None,
+        "premarket_last_ts": premarket_last_bar.ts if premarket_last_bar else None,
         "regular_open": following_open_bar.open if following_open_bar else None,
         "regular_high": max((bar.high for bar in following), default=None),
         "regular_low": min((bar.low for bar in following), default=None),
@@ -218,8 +224,8 @@ def compute_following_session_outcome(
     ]
     incomplete_phases = [
         f"{coverage.phase}_coverage"
-        for coverage in (evidence.regular, evidence.premarket, evidence.following_regular)
-        if coverage is not None and coverage.observed_minutes < coverage.expected_minutes
+        for coverage in (evidence.regular, evidence.following_regular)
+        if coverage is not None and coverage.coverage_ratio < MIN_REGULAR_COVERAGE_RATIO
     ]
     invalid_phases = [
         f"{coverage.phase}_invalid_bar"
@@ -283,7 +289,7 @@ def compute_following_session_outcome(
             evidence.premarket.observed_minutes if evidence.premarket else 0
         ),
         "premarket_expected_minutes": (
-            evidence.premarket.expected_minutes if evidence.premarket else 330
+            evidence.premarket.expected_minutes if evidence.premarket else 150
         ),
         "premarket_coverage_ratio": (
             evidence.premarket.coverage_ratio if evidence.premarket else 0.0
@@ -305,6 +311,8 @@ def compute_following_session_outcome(
             "horizons_minutes": list(HORIZONS_MINUTES),
             "horizon_semantics": "close of minute N; bar start=session_open+N-1m",
             "reference": "last close in authoritative earnings_regular coverage",
+            "premarket_semantics": "first/last observed bar in 07:00-09:30 ET coverage",
+            "min_regular_coverage_ratio": MIN_REGULAR_COVERAGE_RATIO,
             "authoritative_capture_grace_minutes": AUTHORITATIVE_CAPTURE_GRACE_MINUTES,
             "available_after": available_after,
             "execution_assumptions": "none",

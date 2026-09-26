@@ -142,6 +142,10 @@ def build_outcome_row(evidence: FollowingSessionEvidence, *, now: dt.datetime) -
         )
     }
     values = {name: row[name] for name in VALUE_COLUMNS}
+    # Observed premarket bar times have no column of their own; keep them with the
+    # values they qualify.
+    values["premarket_first_ts"] = row["premarket_first_ts"]
+    values["premarket_last_ts"] = row["premarket_last_ts"]
     row["outcome_values"] = values
     row["computed_at"] = now
     return row
