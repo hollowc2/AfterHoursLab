@@ -73,11 +73,19 @@ class FakeGateway:
 
 
 class FakeEarningsClient:
-    def __init__(self, entries=None, error=None) -> None:
+    """`symbol_listings` answers the per-symbol lookups calendar reconciliation makes;
+    a symbol with no entry there is listed nowhere."""
+
+    def __init__(self, entries=None, error=None, symbol_listings=None) -> None:
         self._entries = entries or []
         self._error = error
+        self._symbol_listings = symbol_listings or {}
+        self.symbol_lookups: list[str] = []
 
-    async def get_earnings_calendar(self, from_date, to_date):
+    async def get_earnings_calendar(self, from_date, to_date, *, symbol=None):
+        if symbol is not None:
+            self.symbol_lookups.append(symbol)
+            return list(self._symbol_listings.get(symbol, []))
         if self._error:
             raise self._error
         return self._entries
@@ -116,6 +124,8 @@ def stored(hour=None, **overrides):
         "revenue_actual": None,
         "quarter": None,
         "year": None,
+        "superseded_at": None,
+        "superseded_by_date": None,
     }
     record.update(overrides)
     return record
@@ -165,6 +175,8 @@ class FakeConnection:
                 "revenue_actual": revenue_actual,
                 "quarter": quarter,
                 "year": year,
+                "superseded_at": None,
+                "superseded_by_date": None,
             }
         else:
             # COALESCE semantics: an explicit None check, not truthiness, since 0.0
@@ -183,14 +195,38 @@ class FakeConnection:
                 existing["year"] = year
         return {"inserted": inserted}
 
-    async def fetch(self, sql: str, window_start: dt.date, window_end: dt.date):
-        # Liquidity-excluded events must never reach the watchlist.
+    def _event_rows(self, keep) -> list[dict]:
+        return [
+            {
+                "symbol": symbol,
+                "earnings_date": earnings_date,
+                "year": record["year"],
+                "quarter": record["quarter"],
+                "superseded_at": record.get("superseded_at"),
+            }
+            for (symbol, earnings_date), record in sorted(self._store.items())
+            if record["hour"] == "amc" and keep(symbol, earnings_date, record)
+        ]
+
+    async def fetch(self, sql: str, *args):
+        if "symbol = ANY" in sql:  # calendar_reconcile.fetch_recorded_events
+            (symbols,) = args
+            return self._event_rows(lambda symbol, _date, _record: symbol in symbols)
+        window_start, window_end = args
+        if "SELECT symbol, earnings_date" in sql:  # calendar_reconcile live-in-range
+            return self._event_rows(
+                lambda _symbol, date, record: record.get("superseded_at") is None
+                and window_start <= date <= window_end
+            )
+        # Liquidity-excluded and superseded events must never reach the watchlist.
         assert "liquidity_excluded_at IS NULL" in sql
+        assert "superseded_at IS NULL" in sql
         symbols = sorted(
             {
                 symbol
-                for (symbol, earnings_date) in self._store
+                for (symbol, earnings_date), record in self._store.items()
                 if window_start <= earnings_date <= window_end
+                and record.get("superseded_at") is None
             }
         )
         return [{"symbol": symbol} for symbol in symbols]
@@ -199,7 +235,16 @@ class FakeConnection:
         assert sql.startswith("SELECT pg_try_advisory_lock")
         return self._lock_available
 
-    async def execute(self, sql: str, *_args: object) -> None:
+    async def execute(self, sql: str, *args: object) -> None:
+        if "UPDATE earnings_events" in sql:
+            record = self._store[(args[0], args[1])]
+            if "superseded_at = now()" in sql:
+                if record.get("superseded_at") is None:
+                    record["superseded_at"] = "now"
+                    record["superseded_by_date"] = args[3]
+            else:
+                record["superseded_at"] = record["superseded_by_date"] = None
+            return
         assert sql.startswith("SELECT pg_advisory_unlock")
         self.unlocked = True
 
@@ -245,9 +290,10 @@ def patch_common(
     store=None,
     lock_available=True,
     gateway=None,
+    symbol_listings=None,
 ):
     store = store if store is not None else {}
-    fake_client = FakeEarningsClient(entries_result, error)
+    fake_client = FakeEarningsClient(entries_result, error, symbol_listings)
     monkeypatch.setattr(archive_earnings, "EarningsCalendarClient", lambda settings: fake_client)
     monkeypatch.setattr(archive_earnings, "EarningsSettings", lambda: object())
     monkeypatch.setattr(archive_earnings, "DatabaseSettings", lambda: object())
@@ -670,3 +716,55 @@ async def test_quiet_day_writes_an_empty_but_current_watchlist(
     result = read_watchlist(watchlist_path)
     assert result.symbols == []
     assert result.as_of == TODAY
+
+
+async def test_main_supersedes_phantom_dates_when_the_quarter_is_listed_elsewhere(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ANAB 2026: Q2 was recorded twice before the calendar settled on its real date."""
+    watchlist_path = tmp_path / "watchlist.json"
+    earlier = TODAY - dt.timedelta(days=12)
+    phantom = archive_earnings._previous_trading_day(TODAY)
+    q2 = {"quarter": 2, "year": 2026}
+    store, _ = patch_common(
+        monkeypatch,
+        entries_result=entries(("ANAB", "amc", q2)),
+        store={
+            ("ANAB", earlier): stored("amc", **q2),
+            ("ANAB", phantom): stored("amc", **q2),
+        },
+    )
+
+    exit_code = await archive_earnings._main(["--watchlist", str(watchlist_path)], today=TODAY)
+
+    assert exit_code == 0
+    assert store[("ANAB", earlier)]["superseded_by_date"] == TODAY
+    assert store[("ANAB", phantom)]["superseded_by_date"] == TODAY
+    assert store[("ANAB", TODAY)]["superseded_at"] is None
+    assert load_watchlist(watchlist_path) == ["ANAB"]
+
+
+async def test_main_retires_an_unlisted_event_before_its_phantom_date_is_captured(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    watchlist_path = tmp_path / "watchlist.json"
+    moved_to = TODAY + dt.timedelta(days=20)
+    q3 = {"quarter": 3, "year": 2026}
+    store, _ = patch_common(
+        monkeypatch,
+        entries_result=entries(("OTHER", "amc")),
+        store={("MOVED", TODAY): stored("amc", **q3), ("GONE", TODAY): stored("amc", **q3)},
+        symbol_listings={
+            "MOVED": [
+                EarningsEntry(symbol="MOVED", date=moved_to, hour="amc", quarter=3, year=2026)
+            ],
+        },
+    )
+
+    exit_code = await archive_earnings._main(["--watchlist", str(watchlist_path)], today=TODAY)
+
+    assert exit_code == 0
+    assert store[("MOVED", TODAY)]["superseded_by_date"] == moved_to
+    # Listed nowhere is not evidence of a move: GONE stays live.
+    assert store[("GONE", TODAY)]["superseded_at"] is None
+    assert load_watchlist(watchlist_path) == ["GONE", "OTHER"]

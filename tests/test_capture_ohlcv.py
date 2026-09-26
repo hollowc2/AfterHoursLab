@@ -57,6 +57,7 @@ class FakeConnection:
             return [{"symbol": symbol} for symbol in self.existing_symbols]
         # Liquidity-excluded events must never be captured.
         assert "liquidity_excluded_at IS NULL" in sql
+        assert "superseded_at IS NULL" in sql
         return [{"symbol": "AAPL"}]
 
     async def execute(self, sql, *args):

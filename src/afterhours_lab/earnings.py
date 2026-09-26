@@ -67,16 +67,14 @@ class EarningsCalendarClient:
         self._client = client or httpx.AsyncClient(base_url=FINNHUB_BASE_URL, timeout=10.0)
 
     async def get_earnings_calendar(
-        self, from_date: dt.date, to_date: dt.date
+        self, from_date: dt.date, to_date: dt.date, *, symbol: str | None = None
     ) -> list[EarningsEntry]:
+        params = {"from": from_date.isoformat(), "to": to_date.isoformat()}
+        if symbol is not None:
+            params["symbol"] = symbol
         try:
             response = await self._client.get(
-                "/calendar/earnings",
-                params={
-                    "from": from_date.isoformat(),
-                    "to": to_date.isoformat(),
-                    "token": self._api_key,
-                },
+                "/calendar/earnings", params={**params, "token": self._api_key}
             )
         except httpx.TimeoutException as exc:
             raise EarningsCalendarError("earnings calendar request timed out") from exc

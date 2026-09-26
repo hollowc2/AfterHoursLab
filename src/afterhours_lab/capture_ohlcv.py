@@ -87,7 +87,8 @@ async def _symbols(conn, earnings_date: dt.date) -> list[str]:
     rows = await conn.fetch(
         """
         SELECT symbol FROM earnings_events
-        WHERE earnings_date=$1 AND hour=$2 AND liquidity_excluded_at IS NULL
+        WHERE earnings_date=$1 AND hour=$2
+          AND liquidity_excluded_at IS NULL AND superseded_at IS NULL
         ORDER BY symbol
         """,
         earnings_date,

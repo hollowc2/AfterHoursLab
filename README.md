@@ -35,6 +35,7 @@ uv run ruff check .
 | Persist following-session outcomes | `afterhours-lab-persist-outcomes --from 2026-08-01 --to 2026-08-31` |
 | Register / evaluate a study | `afterhours-lab-study register --spec studies/example.json` |
 | Retroactively flag thin-liquidity events in the `insufficient_data` backlog | `afterhours-lab-backfill-liquidity [--dry-run]` |
+| Supersede events the calendar has since moved to another date | `afterhours-lab-reconcile-calendar --from 2026-08-01 --to 2026-09-30 [--dry-run]` |
 | Live watchlist viewer | `afterhours-lab-watch` |
 | Gateway smoke test | `afterhours-lab-smoke` |
 
@@ -55,6 +56,15 @@ excludes going forward, while the raw event and its evidence stay in the databas
 for audit. Only current liquidity is checkable — the gateway has no historical
 end-date parameter — so it's a proxy for liquidity at the time of each event, not
 an exact historical measure.
+
+The earnings calendar re-dates a fiscal quarter's print as companies firm it up,
+which used to leave the earlier date behind as a phantom event. `archive-earnings`
+now reconciles on every refresh: when the calendar lists the same symbol, fiscal
+year, and quarter on a different date, the recorded row gets
+`earnings_events.superseded_at` and drops out of the watchlist, capture, the live
+monitor, and every research view (see `calendar_reconcile.py`). A symbol simply
+missing from a response is never treated as a move. `reconcile-calendar` applies the
+same rule to events recorded before it existed.
 
 ## Database
 

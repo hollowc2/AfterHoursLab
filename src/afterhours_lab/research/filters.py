@@ -185,9 +185,15 @@ class EventFilter:
         ``archive_earnings.MIN_AVG_DOLLAR_VOLUME``) never enters the universe, the
         same as a thin name archive-earnings now keeps out going forward — it stays
         in ``earnings_events`` and every evidence table for audit, just outside every
-        research view built on this filter.
+        research view built on this filter. A superseded event (a date the earnings
+        calendar has since moved that fiscal quarter away from; see
+        ``calendar_reconcile``) is kept out the same way.
         """
-        clauses = ["e.hour = 'amc'", "e.liquidity_excluded_at IS NULL"]
+        clauses = [
+            "e.hour = 'amc'",
+            "e.liquidity_excluded_at IS NULL",
+            "e.superseded_at IS NULL",
+        ]
         if self.date_from is not None:
             clauses.append(f"e.earnings_date >= {params.add(self.date_from)}")
         if self.date_to is not None:

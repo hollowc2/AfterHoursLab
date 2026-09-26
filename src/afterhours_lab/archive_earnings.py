@@ -11,7 +11,7 @@ from pathlib import Path
 
 import structlog
 
-from afterhours_lab import notify
+from afterhours_lab import calendar_reconcile, notify
 from afterhours_lab.config import AppSettings
 from afterhours_lab.db.advisory_lock import try_advisory_lock
 from afterhours_lab.db.config import DatabaseSettings
@@ -200,7 +200,8 @@ async def _active_symbols(conn, today: dt.date) -> list[str]:
     rows = await conn.fetch(
         """
         SELECT DISTINCT symbol FROM earnings_events
-        WHERE earnings_date BETWEEN $1 AND $2 AND liquidity_excluded_at IS NULL
+        WHERE earnings_date BETWEEN $1 AND $2
+          AND liquidity_excluded_at IS NULL AND superseded_at IS NULL
         ORDER BY symbol
         """,
         window_start,
@@ -210,19 +211,33 @@ async def _active_symbols(conn, today: dt.date) -> list[str]:
 
 
 async def _run_locked(
-    pool: DatabasePool, today: dt.date, matched: list[EarningsEntry]
-) -> tuple[list[str], int] | None:
+    pool: DatabasePool,
+    today: dt.date,
+    matched: list[EarningsEntry],
+    *,
+    calendar_entries: list[EarningsEntry],
+    window: tuple[dt.date, dt.date],
+    lookup: calendar_reconcile.Lookup,
+) -> tuple[list[str], int, calendar_reconcile.ReconcilePlan] | None:
     """Do the DB read/write under a non-blocking advisory lock, held on one connection
-    for both operations (Postgres advisory locks are session-scoped, so a single
-    connection has to span both). Returns None if another run already holds the lock,
-    else (active_symbols, count of genuinely newly-inserted earnings_events rows)."""
+    for every operation (Postgres advisory locks are session-scoped, so a single
+    connection has to span them). Returns None if another run already holds the lock,
+    else (active_symbols, count of genuinely newly-inserted earnings_events rows, the
+    calendar reconciliation applied).
+
+    Reconciliation sees every fetched calendar entry, not just the liquid after-close
+    ones archived here: a quarter re-dated to a thin day or to pre-market is still
+    evidence that the recorded date is no longer the print."""
     async with pool.acquire() as conn:
         async with try_advisory_lock(conn, ARCHIVE_LOCK_KEY) as acquired:
             if not acquired:
                 return None
             inserted_count = await _upsert_earnings_events(conn, matched)
+            plan = await calendar_reconcile.reconcile(
+                conn, calendar_entries, window=window, lookup=lookup
+            )
             active = await _active_symbols(conn, today)
-            return active, inserted_count
+            return active, inserted_count, plan
 
 
 def _record_failure(status_path: Path, detail: str) -> None:
@@ -251,13 +266,22 @@ async def _main(argv: list[str], *, today: dt.date | None = None) -> int:
 
     settings = EarningsSettings()
     async with EarningsCalendarClient(settings) as earnings:
-        try:
-            calendar_entries = await earnings.get_earnings_calendar(args.from_date, args.to_date)
-        except EarningsCalendarError as exc:
-            log.error("earnings_calendar_fetch_failed", error=str(exc))
-            if not args.dry_run:
-                _record_failure(status_path, f"earnings calendar fetch failed: {exc}")
-            return 1
+        return await _archive(args, today, status_path, earnings)
+
+
+async def _archive(
+    args: argparse.Namespace, today: dt.date, status_path: Path, earnings: EarningsCalendarClient
+) -> int:
+    try:
+        calendar_entries = await earnings.get_earnings_calendar(args.from_date, args.to_date)
+    except EarningsCalendarError as exc:
+        log.error("earnings_calendar_fetch_failed", error=str(exc))
+        if not args.dry_run:
+            _record_failure(status_path, f"earnings calendar fetch failed: {exc}")
+        return 1
+
+    async def lookup(symbol: str, from_date: dt.date, to_date: dt.date) -> list[EarningsEntry]:
+        return await earnings.get_earnings_calendar(from_date, to_date, symbol=symbol)
 
     matched = after_close_entries(calendar_entries)
     dropped: list[str] = []
@@ -284,7 +308,14 @@ async def _main(argv: list[str], *, today: dt.date | None = None) -> int:
         db_settings = DatabaseSettings()
         pool = await DatabasePool.connect(db_settings)
         try:
-            result = await _run_locked(pool, today, matched)
+            result = await _run_locked(
+                pool,
+                today,
+                matched,
+                calendar_entries=calendar_entries,
+                window=(args.from_date, args.to_date),
+                lookup=lookup,
+            )
         finally:
             await pool.close()
 
@@ -294,7 +325,9 @@ async def _main(argv: list[str], *, today: dt.date | None = None) -> int:
             _record_success(status_path, msg)
             return 0
 
-        active, inserted_count = result
+        active, inserted_count, plan = result
+        for line in calendar_reconcile.describe(plan):
+            print(line)
         # Stamped with the run's own `today`, not the file's mtime: that's what makes
         # a later reader able to tell a current watchlist from one left behind by a
         # run that stopped happening days ago.
