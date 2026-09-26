@@ -220,6 +220,37 @@ def test_stale_or_fatal_canonical_evidence_is_insufficient(event_change: dict) -
     assert result.classification == PathClassification.INSUFFICIENT_DATA
 
 
+@pytest.mark.parametrize(
+    ("received_offset", "expected_insufficient"),
+    [
+        (None, True),
+        (dt.timedelta(hours=3), True),
+        (dt.timedelta(days=15), False),
+    ],
+)
+def test_stale_is_fatal_only_before_the_phase_ended(
+    received_offset: dt.timedelta | None, expected_insufficient: bool
+) -> None:
+    event = _event(lambda minute: 103.0)
+    received_at = START + received_offset if received_offset is not None else None
+    result = compute_reaction_features(
+        dataclasses.replace(
+            event,
+            regular_stale=True,
+            postmarket_stale=True,
+            regular_received_at=received_at,
+            postmarket_received_at=received_at,
+        )
+    )
+
+    # Postmarket ends at START+4h, so a +3h receipt predates the phase end; a
+    # backfill received 15 days later is a finished session and judged on its bars.
+    insufficient = result.classification == PathClassification.INSUFFICIENT_DATA
+    assert insufficient is expected_insufficient
+    if not expected_insufficient:
+        assert result.reason != "canonical regular or postmarket response is stale"
+
+
 def test_duplicate_timestamp_is_insufficient() -> None:
     event = _event(lambda minute: 103.0)
     duplicate = dataclasses.replace(event.postmarket_bars[0])
@@ -315,6 +346,8 @@ async def test_fetch_uses_only_the_coverage_selected_gateway_responses() -> None
     )
 
     assert len(conn.phase_queries) == 2
+    assert event.regular_received_at == regular_received
+    assert event.postmarket_received_at == post_received
     assert event.regular_response_sha256 == "a" * 64
     assert event.postmarket_response_sha256 == "b" * 64
     assert [bar.ts for bar in event.regular_bars] == [START - dt.timedelta(minutes=1)]

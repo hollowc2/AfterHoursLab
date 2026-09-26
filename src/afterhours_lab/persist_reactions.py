@@ -194,6 +194,7 @@ def algorithm_parameters() -> dict[str, Any]:
         "signal_convention": "close_confirmed_at_interval_end",
         "reference_price": "final_regular_session_minute_close",
         "calendar": "XNYS",
+        "stale_policy": "fatal_only_if_received_before_phase_end",
     }
 
 

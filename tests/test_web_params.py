@@ -96,11 +96,11 @@ def test_query_overrides_replace_only_the_named_key() -> None:
 
 
 def test_non_default_versions_survive_the_round_trip() -> None:
-    query = "feature_version=earnings-reaction-v2&detector_version=other-v1"
+    query = "feature_version=earnings-reaction-v1&detector_version=other-v1"
     restored = parse_event_filter(_params(query))
-    assert restored.versions.feature_version == "earnings-reaction-v2"
+    assert restored.versions.feature_version == "earnings-reaction-v1"
     assert restored.versions.detector_version == "other-v1"
-    assert "feature_version=earnings-reaction-v2" in filter_to_query(restored)
+    assert "feature_version=earnings-reaction-v1" in filter_to_query(restored)
 
 
 def test_describe_filter_lists_only_active_refinements() -> None:

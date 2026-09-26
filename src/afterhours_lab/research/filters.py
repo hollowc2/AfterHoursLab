@@ -16,7 +16,10 @@ from typing import Any
 from afterhours_lab.canonical import canonical_digest, canonical_json
 from afterhours_lab.reactions import CLASSIFIER_VERSION, DETECTOR_VERSION
 
-FEATURE_VERSION = "earnings-reaction-v1"
+# v2 (2026-09-25): the gateway's stale flag is no longer fatal for a phase whose
+# response was received after the phase ended (see reactions._stale_is_fatal), so
+# historical backfills are judged on their bars. v1 rows remain for audit.
+FEATURE_VERSION = "earnings-reaction-v2"
 ALGORITHM_NAME = "earnings_postmarket_reaction"
 
 SYMBOL_PATTERN = re.compile(r"[A-Z][A-Z0-9.-]{0,9}")

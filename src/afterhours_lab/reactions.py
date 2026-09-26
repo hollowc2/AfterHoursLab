@@ -77,6 +77,8 @@ class EventEvidence:
     postmarket_response_sha256: str | None = None
     regular_stale: bool = False
     postmarket_stale: bool = False
+    regular_received_at: dt.datetime | None = None
+    postmarket_received_at: dt.datetime | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -111,6 +113,21 @@ class ReactionFeatures:
     regular_stale: bool = False
     postmarket_stale: bool = False
     reason: str | None = None
+
+
+def _stale_is_fatal(
+    stale: bool, received_at: dt.datetime | None, phase_end: dt.datetime
+) -> bool:
+    """Whether the gateway's ``stale`` flag disqualifies a phase's evidence.
+
+    The gateway marks any session-history response as stale once its data is more
+    than about a day old, so every historical backfill of a finished session carries
+    the flag. For a session that had already closed when the response was received,
+    stale describes the data's age, not an incomplete capture: the bar content is
+    judged on its own by the coverage, quality-flag and checkpoint rules. The flag
+    stays fatal when the receipt time is unknown or predates the phase end.
+    """
+    return stale and (received_at is None or received_at < phase_end)
 
 
 def _pct_change(before: float, after: float) -> float:
@@ -256,7 +273,11 @@ def compute_reaction_features(event: EventEvidence) -> ReactionFeatures:
         or event.regular_expected_end != event.postmarket_expected_start
     ):
         return _empty_features(event, "coverage contains invalid phase bounds")
-    if event.regular_stale or event.postmarket_stale:
+    if _stale_is_fatal(
+        event.regular_stale, event.regular_received_at, event.regular_expected_end
+    ) or _stale_is_fatal(
+        event.postmarket_stale, event.postmarket_received_at, event.postmarket_expected_end
+    ):
         return _empty_features(event, "canonical regular or postmarket response is stale")
     fatal_flags = sorted(FATAL_QUALITY_FLAGS.intersection(event.data_quality_flags))
     if fatal_flags:
@@ -604,6 +625,8 @@ async def fetch_event_evidence(
                 postmarket_response_sha256=row["post_response_sha256"],
                 regular_stale=regular_stale,
                 postmarket_stale=postmarket_stale,
+                regular_received_at=row["regular_received_at"],
+                postmarket_received_at=row["post_received_at"],
             )
         )
     return events
