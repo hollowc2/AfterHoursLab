@@ -38,8 +38,8 @@
 </div>
 {% if not candidates %}
 <div class="disclosure">
-  No after-close earnings events are archived for {{ market_date.isoformat() }}.
-  This is not presented as a market observation.
+  No after-close earnings are recorded for {{ market_date.isoformat() }}.
+  This reflects our data, not the market.
 </div>
 {% else %}
 <div class="panel scroll">
@@ -72,7 +72,7 @@
 <h2>Degradation detail</h2>
 <div class="panel"><dl class="kv">
 {% for row in candidates %}
-  <dt>{{ row.symbol }}</dt><dd>{{ row.degradation_reasons | join('; ') if row.degradation_reasons else 'no degradation reported' }}</dd>
+  <dt>{{ row.symbol }}</dt><dd>{{ row.degradation_reasons | join('; ') if row.degradation_reasons else 'no issues' }}</dd>
 {% endfor %}
 </dl></div>
 {% endif %}

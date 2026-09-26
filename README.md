@@ -4,81 +4,73 @@
 
 # AfterHoursLab
 
-A read-only research lab for after-hours earnings reactions.
+AfterHoursLab records how stocks react to after-close earnings reports. Every result can be traced back to its source data.
 
-The auditable chain: raw gateway evidence → authoritative OHLCV coverage →
-versioned reaction features → versioned following-session outcomes →
-preregistered studies → one sealed out-of-sample result.
+It never places trades. It captures market data, measures each reaction, and tests hypotheses under preregistered rules:
+
+**raw quotes → verified price bars → reaction features → next-session outcomes → preregistered studies → one sealed out-of-sample result**
 
 ## Setup
 
 ```bash
 uv sync
-cp .env.example .env   # fill in SCHWAB_GATEWAY_URL, SCHWAB_GATEWAY_API_KEY, DATABASE__*
+cp .env.example .env   # set SCHWAB_GATEWAY_URL, SCHWAB_GATEWAY_API_KEY, DATABASE__*
 uv run afterhours-lab-migrate
 ```
+
+Run the tests and linter:
 
 ```bash
 uv run pytest
 uv run ruff check .
 ```
 
-## Core workflow
+## Commands
 
-| Step | Command |
+| Task | Command |
 | --- | --- |
-| Archive after-close earnings into the watchlist | `afterhours-lab-archive-earnings` |
-| Capture authoritative OHLCV for a phase | `afterhours-lab-capture-ohlcv --phase earnings_regular --market-date 2026-08-26` |
-| Audit captured coverage | `afterhours-lab-audit-ohlcv --date 2026-08-26` |
-| Compute a reaction report (read-only) | `afterhours-lab-reactions --from 2026-08-01 --to 2026-08-31` |
-| Persist reaction features | `afterhours-lab-persist-reactions --from 2026-08-01 --to 2026-08-31` |
-| Persist following-session outcomes | `afterhours-lab-persist-outcomes --from 2026-08-01 --to 2026-08-31` |
-| Register / evaluate a study | `afterhours-lab-study register --spec studies/example.json` |
-| Retroactively flag thin-liquidity events in the `insufficient_data` backlog | `afterhours-lab-backfill-liquidity [--dry-run]` |
-| Supersede events the calendar has since moved to another date | `afterhours-lab-reconcile-calendar --from 2026-08-01 --to 2026-09-30 [--dry-run]` |
-| Live watchlist viewer | `afterhours-lab-watch` |
-| Gateway smoke test | `afterhours-lab-smoke` |
+| Add upcoming after-close earnings to the watchlist | `afterhours-lab-archive-earnings` |
+| Capture price bars for one phase | `afterhours-lab-capture-ohlcv --phase earnings_regular --market-date 2026-08-26` |
+| Check capture coverage | `afterhours-lab-audit-ohlcv --date 2026-08-26` |
+| Preview reactions without saving | `afterhours-lab-reactions --from 2026-08-01 --to 2026-08-31` |
+| Save reaction features | `afterhours-lab-persist-reactions --from 2026-08-01 --to 2026-08-31` |
+| Save next-session outcomes | `afterhours-lab-persist-outcomes --from 2026-08-01 --to 2026-08-31` |
+| Register or evaluate a study | `afterhours-lab-study register --spec studies/example.json` |
+| Exclude older low-liquidity events | `afterhours-lab-backfill-liquidity [--dry-run]` |
+| Retire events whose earnings date has moved | `afterhours-lab-reconcile-calendar --from 2026-08-01 --to 2026-09-30 [--dry-run]` |
+| Watch the live watchlist | `afterhours-lab-watch` |
+| Test the gateway connection | `afterhours-lab-smoke` |
 
-Every persistence step is insert-only and versioned — reruns never overwrite prior
-evidence or results, and definition changes ship as a new version rather than an edit.
+### Data is never overwritten
 
-`archive-earnings` drops candidates whose trailing 10-session average daily dollar
-volume is under `MIN_AVG_DOLLAR_VOLUME` ($20M) before they ever reach
-`earnings_events` or the watchlist — thinly-traded names never get captured,
-monitored, or counted in `/quality`. A symbol is kept, not dropped, if its liquidity
-check itself fails (see `archive_earnings.py`).
+Every write adds new rows. Running a command again never replaces earlier data, and a changed definition is saved as a new version instead of editing the old one.
 
-That filter was forward-only, so `backfill-liquidity` applies the same floor to
-`insufficient_data` events already recorded before it shipped. It never deletes or
-rewrites a row: it sets `earnings_events.liquidity_excluded_at` (see
-`backfill_liquidity.py`), which every research view (`EventFilter.scope_sql`)
-excludes going forward, while the raw event and its evidence stay in the database
-for audit. Only current liquidity is checkable — the gateway has no historical
-end-date parameter — so it's a proxy for liquidity at the time of each event, not
-an exact historical measure.
+### Liquidity filter
 
-The earnings calendar re-dates a fiscal quarter's print as companies firm it up,
-which used to leave the earlier date behind as a phantom event. `archive-earnings`
-now reconciles on every refresh: when the calendar lists the same symbol, fiscal
-year, and quarter on a different date, the recorded row gets
-`earnings_events.superseded_at` and drops out of the watchlist, capture, the live
-monitor, and every research view (see `calendar_reconcile.py`). A symbol simply
-missing from a response is never treated as a move. `reconcile-calendar` applies the
-same rule to events recorded before it existed.
+`archive-earnings` skips any stock that averaged less than $20M a day in dollar volume over the last 10 sessions (`MIN_AVG_DOLLAR_VOLUME`). Skipped stocks are never captured, monitored, or counted in `/quality`. If the liquidity check fails, the stock is kept.
+
+`backfill-liquidity` applies the same rule to events recorded before the filter existed. It sets `earnings_events.liquidity_excluded_at`, which removes the event from every research view. The underlying data stays in the database for audit. The gateway reports only current liquidity, so this check approximates liquidity at the time of each event rather than measuring it.
+
+### Rescheduled earnings
+
+Companies often move their earnings date after announcing it. On every refresh, `archive-earnings` checks the calendar. If the same symbol, fiscal year, and quarter now appears on a different date, the old event gets `earnings_events.superseded_at` and is removed from the watchlist, capture, the live monitor, and every research view. A symbol that is simply missing from the calendar is not treated as moved. `reconcile-calendar` applies the same rule to events recorded earlier.
 
 ## Database
 
-Postgres/TimescaleDB, migrated with `afterhours-lab-migrate` (forward-only, no
-rollback tooling by design). Core tables: `earnings_events`, `candles`,
-`quote_evidence` / `bar_evidence`, `earnings_ohlcv_coverage`,
-`earnings_reaction_features`, `following_session_outcomes`, `study_*`, and
-append-only `research_notes`.
+The database is PostgreSQL with TimescaleDB. `afterhours-lab-migrate` applies migrations forward only and has no rollback. The main tables are:
+
+- `earnings_events`
+- `candles`
+- `quote_evidence` and `bar_evidence`
+- `earnings_ohlcv_coverage`
+- `earnings_reaction_features`
+- `following_session_outcomes`
+- `study_*`
+- `research_notes` (append-only)
 
 ## Research access
 
-`afterhours_lab.research` is the single typed read layer over the database —
-CLI, notebooks, and the website all go through it, so a join or definition only
-changes once.
+The CLI, notebooks, and website all read data through `afterhours_lab.research`, so each definition is written once.
 
 ```python
 from afterhours_lab.research import EventFilter, fetch_cohort
@@ -90,16 +82,18 @@ async with pool.acquire() as conn:
 ```
 
 ```bash
-uv sync --extra notebooks && uv run jupyter lab   # notebooks/ — read-only clients, no SQL
-uv run afterhours-lab-web                          # http://127.0.0.1:8055 — /today /events /quality
+uv sync --extra notebooks && uv run jupyter lab   # notebooks/ read data only, never write SQL
+uv run afterhours-lab-web                          # http://127.0.0.1:8055 (/today, /events, /quality)
 ```
 
 ## Deployment
 
-Runs on Docker Compose on `monitoring_net`, alongside `schwab-gateway`. Batch jobs
-(`archive-earnings`, OHLCV capture, `persist-reactions`, `persist-outcomes`) run from
-cron via `infra/cron/`; the research website and raw quote monitor are long-running
-services with `restart: unless-stopped`. See `infra/` for cron and logrotate configs.
+AfterHoursLab runs under Docker Compose on the `monitoring_net` network, next to `schwab-gateway`.
+
+- **Batch jobs** (`archive-earnings`, price-bar capture, `persist-reactions`, `persist-outcomes`) run on cron. See `infra/cron/`.
+- **Services** (the website and the live quote monitor) run continuously with `restart: unless-stopped`.
+
+Cron and logrotate configs are in `infra/`.
 
 ```bash
 docker compose build

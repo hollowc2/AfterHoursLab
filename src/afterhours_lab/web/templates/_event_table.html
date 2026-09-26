@@ -2,18 +2,17 @@
 <div id="results">
   <div class="disclosure">
     Showing <strong>{{ cohort.page_count }}</strong> of
-    <strong>{{ cohort.included_count }}</strong> included events;
-    <strong>{{ cohort.excluded_count }}</strong> of the
-    {{ cohort.universe_count }} after-close events in this date and symbol scope were
-    excluded by the active filters.
+    <strong>{{ cohort.included_count }}</strong> matching events.
+    Filters excluded <strong>{{ cohort.excluded_count }}</strong> of the
+    {{ cohort.universe_count }} after-close events in this date and symbol range.
     {% if cohort.excluded_by_status %}
-      Excluded by analysis status:
+      Excluded by status:
       {% for status, total in cohort.excluded_by_status %}
         <span class="tag">{{ status }} {{ total }}</span>
       {% endfor %}
     {% endif %}
     {% if cohort.truncated %}
-      This page is capped at {{ filter.limit }} rows.
+      Results are limited to {{ filter.limit }} rows per page.
     {% endif %}
   </div>
 
@@ -95,7 +94,7 @@
           </td>
         </tr>
         {% else %}
-        <tr><td colspan="17" class="muted">No events matched this cohort.</td></tr>
+        <tr><td colspan="17" class="muted">No events match these filters.</td></tr>
         {% endfor %}
       </tbody>
     </table>
@@ -111,6 +110,6 @@
       <a href="/events?{{ query(filter, page=page + 1) }}">page {{ page + 1 }} &rarr;</a>
     {% endif %}
     <span class="spacer"></span>
-    <a href="/events.csv?{{ query(filter) }}">Download this cohort as CSV</a>
+    <a href="/events.csv?{{ query(filter) }}">Download as CSV</a>
   </div>
 </div>

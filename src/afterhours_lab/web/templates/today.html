@@ -4,8 +4,8 @@
 {% block content %}
 <h1>Today &mdash; {{ market_date.isoformat() }}</h1>
 <p class="lede">
-  After-close reporters for this session. Every live value is <strong>provisional</strong>
-  until a persisted feature row exists. The complete snapshot works without JavaScript.
+  Companies reporting after today's close. Live values are <strong>provisional</strong>
+  until their features are saved. This page works without JavaScript.
 </p>
 <p>
   <span id="stream-state" class="tag {{ 'provisional' if is_live_date else '' }}"

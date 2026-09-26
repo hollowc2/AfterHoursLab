@@ -12,8 +12,7 @@
     computed {{ summary.computed_at | et(true) }}.
   {% else %}
     <span class="tag provisional">not analyzed</span>
-    No persisted feature row exists for the current version triple. The chart below
-    still shows whatever authoritative evidence was captured.
+    No saved features exist for the current version. The chart still shows all captured data.
   {% endif %}
 </p>
 
@@ -27,7 +26,7 @@
 {% endif %}
 {% if summary.any_historical_backfill %}
   <div class="disclosure warn">
-    This event was recovered by historical backfill rather than captured on schedule
+    This event was filled in from historical data, not captured live
     (regular = {{ summary.earnings_regular_collection_mode }},
     postmarket = {{ summary.earnings_postmarket_collection_mode }}).
   </div>
@@ -51,7 +50,7 @@
   <div class="chart" data-figure='{{ following_figure | tojson }}'></div>
 </div>
 {% else %}
-<div class="disclosure">The following session has not been captured for this event.</div>
+<div class="disclosure">The next session has not been captured yet.</div>
 {% endif %}
 
 <div class="grid three">
@@ -134,7 +133,7 @@
         {% endfor %}
       </dl>
     {% else %}
-      <p class="muted">No stored parameters — this event has not been analyzed.</p>
+      <p class="muted">No parameters stored. This event has not been analyzed.</p>
     {% endif %}
   </div>
 </div>
@@ -185,7 +184,7 @@
           {% for tag in note.tags %}<span class="tag">{{ tag }}</span>{% endfor %}
         </li>
       {% else %}
-        <li class="muted">No notes yet. Discretionary observations live here, never in computed features.</li>
+        <li class="muted">No notes yet. Notes hold your own observations and never change computed features.</li>
       {% endfor %}
     </ul>
   </div>
@@ -198,7 +197,7 @@
       <label for="tags" style="margin-top:.5rem">Tags (comma separated)</label>
       <input type="text" id="tags" name="tags" placeholder="fade,thin-liquidity">
       <div style="margin-top:.6rem"><button type="submit">Add note</button></div>
-      <p class="muted" style="margin-bottom:0">Notes are append-only; a correction is a new note.</p>
+      <p class="muted" style="margin-bottom:0">Notes can't be edited. To correct one, add a new note.</p>
     </form>
   </div>
 </div>

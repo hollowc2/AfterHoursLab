@@ -4,9 +4,8 @@
 
 <h1>Data quality &amp; operations</h1>
 <p class="lede">
-  Kept separate from the research leaderboard on purpose: a missing capture phase is an
-  operations problem, and mixing it into reaction statistics invites reading a coverage
-  gap as a market observation.
+  Data problems are kept off the research pages. A missing capture is an operations
+  issue, not a market signal, and mixing the two would make gaps look like results.
 </p>
 
 <div class="grid two">
@@ -25,8 +24,8 @@
       <dd>{{ operations.last_feature_computed_at | et(true) }} ({{ operations.last_feature_computed_at | age }})</dd>
     </dl>
     <p class="muted">
-      These are read from what each writer actually wrote, so a scheduled job that
-      failed silently shows up here as a stale timestamp rather than as nothing at all.
+      Times come from the data each job actually wrote, so a job that failed silently
+      shows up as a stale time.
     </p>
   </div>
 
@@ -53,12 +52,12 @@
   </div>
 </div>
 
-<h2>Issues in scope
+<h2>Issues
   {% if filter.date_from %}({{ filter.date_from.isoformat() }} to {{ filter.date_to.isoformat() if filter.date_to else 'now' }}){% endif %}
 </h2>
 
 <div class="disclosure">
-  {{ issues | length }} event(s) in this scope are not research-grade.
+  {{ issues | length }} event(s) in this range aren't ready for research.
   {% for kind, rows in grouped.items() %}
     <span class="tag">{{ kind }} {{ rows | length }}</span>
   {% endfor %}
@@ -84,7 +83,7 @@
         <td class="num">{{ issue.expected_minutes if issue.expected_minutes is not none else '—' }}</td>
       </tr>
       {% else %}
-      <tr><td colspan="7" class="muted">No quality issues in this scope.</td></tr>
+      <tr><td colspan="7" class="muted">No issues in this range.</td></tr>
       {% endfor %}
     </tbody>
   </table>
