@@ -22,5 +22,6 @@ case "$(TZ=America/New_York date +%H:%M)" in
 esac
 
 cd /opt/afterhours-lab
+echo "--- $(date -u +%FT%TZ) $(basename "$0")"
 exec docker compose run --rm afterhours-lab \
   afterhours-lab-archive-earnings --watchlist /app/data/watchlist.json

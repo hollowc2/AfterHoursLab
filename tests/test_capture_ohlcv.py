@@ -55,6 +55,8 @@ class FakeConnection:
     async def fetch(self, sql, *_args):
         if "FROM earnings_ohlcv_coverage" in sql:
             return [{"symbol": symbol} for symbol in self.existing_symbols]
+        # Liquidity-excluded events must never be captured.
+        assert "liquidity_excluded_at IS NULL" in sql
         return [{"symbol": "AAPL"}]
 
     async def execute(self, sql, *args):

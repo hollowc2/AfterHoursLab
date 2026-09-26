@@ -200,7 +200,7 @@ async def _active_symbols(conn, today: dt.date) -> list[str]:
     rows = await conn.fetch(
         """
         SELECT DISTINCT symbol FROM earnings_events
-        WHERE earnings_date BETWEEN $1 AND $2
+        WHERE earnings_date BETWEEN $1 AND $2 AND liquidity_excluded_at IS NULL
         ORDER BY symbol
         """,
         window_start,

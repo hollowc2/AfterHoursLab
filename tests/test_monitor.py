@@ -32,6 +32,7 @@ class FakeConnection:
 
     async def fetch(self, sql, *_args):
         assert "hour = 'amc'" in sql
+        assert "liquidity_excluded_at IS NULL" in sql
         self.fetch_calls += 1
         return [{"symbol": symbol} for symbol in self.symbols]
 

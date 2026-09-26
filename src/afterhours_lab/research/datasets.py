@@ -902,7 +902,7 @@ async def fetch_monitor_candidates(conn, market_date: dt.date) -> tuple[str, ...
         """
         SELECT symbol
         FROM earnings_events
-        WHERE earnings_date = $1 AND hour = 'amc'
+        WHERE earnings_date = $1 AND hour = 'amc' AND liquidity_excluded_at IS NULL
         ORDER BY symbol
         """,
         market_date,

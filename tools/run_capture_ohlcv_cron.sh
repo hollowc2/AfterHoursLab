@@ -27,5 +27,6 @@ case "$(TZ=America/New_York date +%H:%M)" in
     ;;
 esac
 
+echo "--- $(date -u +%FT%TZ) $(basename "$0")"
 exec docker compose run --rm afterhours-lab afterhours-lab-capture-ohlcv \
   --market-date "$market_date" "${phases[@]}"

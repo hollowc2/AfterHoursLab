@@ -183,7 +183,9 @@ class FakeConnection:
                 existing["year"] = year
         return {"inserted": inserted}
 
-    async def fetch(self, _sql: str, window_start: dt.date, window_end: dt.date):
+    async def fetch(self, sql: str, window_start: dt.date, window_end: dt.date):
+        # Liquidity-excluded events must never reach the watchlist.
+        assert "liquidity_excluded_at IS NULL" in sql
         symbols = sorted(
             {
                 symbol

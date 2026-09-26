@@ -23,5 +23,6 @@ fi
 cd /opt/afterhours-lab
 from_date="$(TZ=America/New_York date -d '4 days ago' +%F)"
 to_date="$(TZ=America/New_York date +%F)"
+echo "--- $(date -u +%FT%TZ) $(basename "$0")"
 exec docker compose run --rm afterhours-lab afterhours-lab-persist-reactions \
   --from "$from_date" --to "$to_date"
