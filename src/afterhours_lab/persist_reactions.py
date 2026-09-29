@@ -40,6 +40,7 @@ from afterhours_lab.reactions import (
     DELAYED_AFTER_MINUTES,
     DETECTOR_VERSION,
     HORIZONS_MINUTES,
+    MAX_CHECKPOINT_CARRY_MINUTES,
     MIN_POSTMARKET_BARS,
     REACTION_THRESHOLD_PCT,
     EventEvidence,
@@ -195,6 +196,8 @@ def algorithm_parameters() -> dict[str, Any]:
         "reference_price": "final_regular_session_minute_close",
         "calendar": "XNYS",
         "stale_policy": "fatal_only_if_received_before_phase_end",
+        "checkpoint_policy": "exact_minute_else_latest_prior_postmarket_close",
+        "max_checkpoint_carry_minutes": MAX_CHECKPOINT_CARRY_MINUTES,
     }
 
 

@@ -90,16 +90,47 @@ def test_no_trigger_retains_window_measurements() -> None:
     assert result.cumulative_volume[105] == 1050
 
 
-@pytest.mark.parametrize("missing_minute", [0, 4, 14, 29, 59, 104])
-def test_missing_exact_checkpoint_is_insufficient(missing_minute: int) -> None:
+@pytest.mark.parametrize("missing_minute", [4, 14, 29, 59, 104])
+def test_missing_checkpoint_minute_carries_the_prior_close_forward(missing_minute: int) -> None:
     result = compute_reaction_features(
-        _event(lambda minute: 103.0, missing_minutes={missing_minute})
+        _event(lambda minute: 103.0 + minute / 100.0, missing_minutes={missing_minute})
     )
+    horizon = missing_minute + 1
 
-    assert result.classification == PathClassification.INSUFFICIENT_DATA
-    assert result.reason is not None and "missing exact checkpoint" in result.reason
+    assert result.classification == PathClassification.CONTINUATION
+    assert result.returns_pct[horizon] == pytest.approx(3.0 + (missing_minute - 1) / 100.0)
+    assert f"checkpoint_{horizon}m_carried_forward_1m" in result.data_quality_flags
     assert result.study_observed_minutes == 104
     assert result.study_missing_minutes == 1
+
+
+def test_exact_checkpoint_bars_add_no_carry_flag() -> None:
+    result = compute_reaction_features(_event(lambda minute: 103.0))
+
+    assert not any("carried_forward" in flag for flag in result.data_quality_flags)
+
+
+def test_checkpoint_carries_up_to_the_limit_and_no_further() -> None:
+    within = compute_reaction_features(
+        _event(lambda minute: 103.0, missing_minutes=set(range(95, 105)))
+    )
+    beyond = compute_reaction_features(
+        _event(lambda minute: 103.0, missing_minutes=set(range(93, 105)))
+    )
+
+    assert within.classification != PathClassification.INSUFFICIENT_DATA
+    assert "checkpoint_105m_carried_forward_10m" in within.data_quality_flags
+    assert beyond.classification == PathClassification.INSUFFICIENT_DATA
+    assert beyond.reason == "no checkpoint bar within 10m for: 105m"
+    assert beyond.returns_pct[105] is None
+    assert beyond.returns_pct[60] is not None
+
+
+def test_first_checkpoint_never_carries_from_before_the_postmarket_phase() -> None:
+    result = compute_reaction_features(_event(lambda minute: 103.0, missing_minutes={0}))
+
+    assert result.classification == PathClassification.INSUFFICIENT_DATA
+    assert result.reason == "no checkpoint bar within 10m for: 1m"
 
 
 def test_zero_volume_is_insufficient_and_vwap_is_disclosed() -> None:

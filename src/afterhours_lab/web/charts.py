@@ -13,7 +13,7 @@ from collections.abc import Sequence
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from afterhours_lab.reactions import HORIZONS_MINUTES, REACTION_THRESHOLD_PCT
+from afterhours_lab.reactions import HORIZONS_MINUTES, REACTION_THRESHOLD_PCT, checkpoint_bar
 from afterhours_lab.research import EventDetail, EventSummary, PathBar
 
 EASTERN = ZoneInfo("America/New_York")
@@ -316,11 +316,11 @@ def event_figure(detail: EventDetail) -> dict[str, Any]:
 
 
 def _checkpoint_trace(detail: EventDetail) -> dict[str, Any] | None:
-    """PM+1/5/15/30/60/105 markers placed on the exact bars the features used."""
+    """PM+1/5/15/30/60/105 markers placed on the bars the features used."""
     start = detail.postmarket_start
     if start is None:
         return None
-    by_ts = {bar.ts: bar for bar in detail.bars_for("earnings_postmarket")}
+    postmarket = sorted(detail.bars_for("earnings_postmarket"), key=lambda bar: bar.ts)
     xs: list[str] = []
     ys: list[float] = []
     texts: list[str] = []
@@ -337,11 +337,11 @@ def _checkpoint_trace(detail: EventDetail) -> dict[str, Any] | None:
     for minutes in HORIZONS_MINUTES:
         # Evidence timestamps identify interval starts, so the PM+n close is the bar
         # beginning at start + (n - 1) minutes.
-        target = start + dt.timedelta(minutes=minutes - 1)
-        bar = by_ts.get(target)
-        if bar is None:
+        found = checkpoint_bar(postmarket, start + dt.timedelta(minutes=minutes - 1))
+        if found is None:
             continue
-        xs.append(_et(target))
+        bar, _age = found
+        xs.append(_et(bar.ts))
         ys.append(bar.close)
         texts.append(f"+{minutes}m")
         change = returns.get(minutes)

@@ -17,6 +17,7 @@ import re
 import sys
 from collections.abc import Iterable, Sequence
 from enum import StrEnum
+from typing import Protocol, TypeVar
 from zoneinfo import ZoneInfo
 
 from rich.console import Console
@@ -29,6 +30,9 @@ REACTION_THRESHOLD_PCT = 2.0
 DELAYED_AFTER_MINUTES = 15
 MIN_POSTMARKET_BARS = 5
 HORIZONS_MINUTES = (1, 5, 15, 30, 60, 105)
+# A checkpoint with no bar in its exact minute takes the latest earlier postmarket
+# close no more than this many minutes old (thin names skip minutes with no trades).
+MAX_CHECKPOINT_CARRY_MINUTES = 10
 DETECTOR_VERSION = "fixed-preclose-2pct-v1"
 CLASSIFIER_VERSION = "path-retention-v1"
 EASTERN = ZoneInfo("America/New_York")
@@ -128,6 +132,31 @@ def _stale_is_fatal(
     stays fatal when the receipt time is unknown or predates the phase end.
     """
     return stale and (received_at is None or received_at < phase_end)
+
+
+class _Timestamped(Protocol):
+    @property
+    def ts(self) -> dt.datetime: ...
+
+
+_BarT = TypeVar("_BarT", bound=_Timestamped)
+
+
+def checkpoint_bar(bars: Sequence[_BarT], target: dt.datetime) -> tuple[_BarT, int] | None:
+    """The bar a checkpoint reads, with its age in minutes, or ``None``.
+
+    ``bars`` must be sorted postmarket bars. The exact ``target`` minute wins; without
+    it, the latest earlier bar is carried forward if it is at most
+    ``MAX_CHECKPOINT_CARRY_MINUTES`` old. A minute with no bar had no trades, so the
+    last traded close is the price a participant would have seen. Nothing is ever
+    carried from after the target or from before the postmarket phase.
+    """
+    for bar in reversed(bars):
+        if bar.ts > target:
+            continue
+        age = int((target - bar.ts).total_seconds() // 60)
+        return (bar, age) if age <= MAX_CHECKPOINT_CARRY_MINUTES else None
+    return None
 
 
 def _pct_change(before: float, after: float) -> float:
@@ -243,7 +272,9 @@ def compute_reaction_features(event: EventEvidence) -> ReactionFeatures:
     one minute), when the close-confirmed signal becomes knowable. Fixed horizon
     returns remain relative to pre-close.
     Because evidence timestamps identify interval starts, 1m uses the 16:00 bar close,
-    5m uses 16:04, and 105m uses 17:44. Missing minutes are never interpolated.
+    5m uses 16:04, and 105m uses 17:44. A checkpoint minute with no bar carries the
+    latest earlier postmarket close forward up to ``MAX_CHECKPOINT_CARRY_MINUTES``
+    (flagged ``checkpoint_<n>m_carried_forward_<age>m``); nothing is interpolated.
 
     Classification precedence is insufficient, no-trigger, whipsaw, fade, delayed,
     then continuation. A whipsaw reaches 2% on both sides of pre-close. A fade retains
@@ -335,19 +366,20 @@ def compute_reaction_features(event: EventEvidence) -> ReactionFeatures:
 
     flags = list(event.data_quality_flags)
 
-    by_timestamp = {bar.ts: bar for bar in postmarket}
     horizon_targets = {
         minutes: event.postmarket_expected_start + dt.timedelta(minutes=minutes - 1)
         for minutes in HORIZONS_MINUTES
     }
-    horizon_returns = {
-        minutes: (
-            _pct_change(pre_close, by_timestamp[target].close)
-            if (target := horizon_targets[minutes]) in by_timestamp
-            else None
-        )
-        for minutes in HORIZONS_MINUTES
-    }
+    horizon_returns: dict[int, float | None] = {}
+    for minutes in HORIZONS_MINUTES:
+        found = checkpoint_bar(postmarket, horizon_targets[minutes])
+        if found is None:
+            horizon_returns[minutes] = None
+            continue
+        bar, age = found
+        horizon_returns[minutes] = _pct_change(pre_close, bar.close)
+        if age:
+            flags.append(f"checkpoint_{minutes}m_carried_forward_{age}m")
     cumulative_volume = {
         minutes: sum(
             bar.volume or 0 for bar in postmarket if bar.ts <= horizon_targets[minutes]
@@ -367,7 +399,9 @@ def compute_reaction_features(event: EventEvidence) -> ReactionFeatures:
         reasons = []
         if missing_checkpoints:
             joined = ",".join(str(minutes) for minutes in missing_checkpoints)
-            reasons.append(f"missing exact checkpoint bar(s): {joined}m")
+            reasons.append(
+                f"no checkpoint bar within {MAX_CHECKPOINT_CARRY_MINUTES}m for: {joined}m"
+            )
         if vwap is None:
             reasons.append("zero eligible volume in study window")
         incomplete = _empty_features(event, "; ".join(reasons))

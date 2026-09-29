@@ -19,7 +19,11 @@ from afterhours_lab.reactions import CLASSIFIER_VERSION, DETECTOR_VERSION
 # v2 (2026-09-25): the gateway's stale flag is no longer fatal for a phase whose
 # response was received after the phase ended (see reactions._stale_is_fatal), so
 # historical backfills are judged on their bars. v1 rows remain for audit.
-FEATURE_VERSION = "earnings-reaction-v2"
+# v3 (2026-09-29): a checkpoint minute with no bar carries the latest earlier
+# postmarket close forward up to 10 minutes (reactions.checkpoint_bar), flagged per
+# checkpoint. Thin names skip untraded minutes; v2 required the exact minute bar and
+# rejected 28/81 events, mostly for 1-2 minute gaps. v1/v2 rows remain for audit.
+FEATURE_VERSION = "earnings-reaction-v3"
 ALGORITHM_NAME = "earnings_postmarket_reaction"
 
 SYMBOL_PATTERN = re.compile(r"[A-Z][A-Z0-9.-]{0,9}")
