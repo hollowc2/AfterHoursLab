@@ -23,6 +23,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import (
+    FileResponse,
     HTMLResponse,
     JSONResponse,
     PlainTextResponse,
@@ -246,6 +247,11 @@ def create_app(
     @app.get("/", include_in_schema=False)
     async def root() -> RedirectResponse:
         return RedirectResponse("/today")
+
+    @app.get("/favicon.ico", include_in_schema=False)
+    async def favicon() -> FileResponse:
+        # Browsers request /favicon.ico directly, ignoring the <link> in base.html.
+        return FileResponse(STATIC_DIR / "favicon.ico", media_type="image/x-icon")
 
     @app.get("/healthz", response_class=PlainTextResponse)
     async def healthz(request: Request) -> str:

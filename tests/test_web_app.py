@@ -114,6 +114,15 @@ def test_healthz_reports_a_live_connection(full_conn: FakeConnection) -> None:
         assert client.get("/healthz").text == "ok"
 
 
+def test_favicon_is_served_at_the_root_and_linked(full_conn: FakeConnection) -> None:
+    with client_for(full_conn) as client:
+        icon = client.get("/favicon.ico")
+        body = client.get(f"/today?date={DATE}").text
+    assert icon.status_code == 200
+    assert icon.headers["content-type"] == "image/x-icon"
+    assert '<link rel="icon" href="/static/favicon.ico"' in body
+
+
 def test_today_labels_provisional_and_finalized_state(full_conn: FakeConnection) -> None:
     with client_for(full_conn) as client:
         body = client.get(f"/today?date={DATE}").text
